@@ -15,6 +15,7 @@ schemes are hardcoded.
 import logging
 from typing import Any, Callable, Dict, List, Optional
 
+from google.cloud.firestore_v1.base_query import FieldFilter, Or
 from google.cloud.firestore_v1.base_vector_query import DistanceMeasure
 from google.cloud.firestore_v1.vector import Vector
 
@@ -43,16 +44,70 @@ def default_embed_fn(texts: List[str]) -> List[List[float]]:
     return [e.tolist() for e in embeddings]
 
 
+def _build_field_filter(key: str, value) -> FieldFilter:
+    """Build a single FieldFilter from a ChromaDB field condition.
+
+    Handles both plain equality (``{"field": "value"}``) and operator
+    forms (``{"field": {"$gte": 5}}``).
+
+    ChromaDB raises if more than one operator is present in a single
+    expression dict (e.g. ``{"$gte": 5, "$lte": 10}``).
+    """
+    if isinstance(value, dict):
+        op_map = {
+            "$eq": "==",
+            "$ne": "!=",
+            "$gt": ">",
+            "$gte": ">=",
+            "$lt": "<",
+            "$lte": "<=",
+            "$in": "in",
+            "$nin": "not-in",
+        }
+        if len(value) > 1:
+            raise ValueError(
+                f"Expected operator expression to have exactly one operator, got {value}"
+            )
+        for op, v in value.items():
+            if op in op_map:
+                return FieldFilter("meta." + key, op_map[op], v)
+        raise ValueError(f"Unsupported operator in where filter: {list(value.keys())}")
+    return FieldFilter("meta." + key, "==", value)
+
+
+def _collect_field_filters(where: Dict[str, Any]) -> List[FieldFilter]:
+    """Collect FieldFilter objects from a where dict, handling nested composites.
+
+    Supports plain field conditions and recursively expands ``$and`` blocks
+    so that ``$or`` containing ``$and`` sub-filters works correctly.
+    """
+    filters = []
+    for key, value in where.items():
+        if key == "$and":
+            for sub in value:
+                filters.extend(_collect_field_filters(sub))
+        elif key.startswith("$"):
+            continue
+        else:
+            filters.append(_build_field_filter(key, value))
+    return filters
+
+
 def _apply_where_filter(query, where: Dict[str, Any]):
     """Translate ChromaDB where-filter syntax to Firestore query chains.
 
     Supports:
       {"field": "value"}                  — equality
-      {"$and": [{...}, {...}]}            — AND of filters
-      {"field": {"$in": [...]}}           — IN filter
-      {"field": {"$gte": v}}              — >= filter
-      {"field": {"$lte": v}}              — <= filter
+      {"field": {"$eq": v}}               — equality (explicit)
       {"field": {"$ne": v}}               — != filter
+      {"field": {"$gt": v}}               — > filter
+      {"field": {"$gte": v}}              — >= filter
+      {"field": {"$lt": v}}               — < filter
+      {"field": {"$lte": v}}              — <= filter
+      {"field": {"$in": [...]}}           — IN filter
+      {"field": {"$nin": [...]}}          — NOT-IN filter
+      {"$and": [{...}, {...}]}            — AND of filters
+      {"$or": [{...}, {...}]}             — OR of filters (Firestore Or)
     """
     if not where:
         return query
@@ -63,29 +118,37 @@ def _apply_where_filter(query, where: Dict[str, Any]):
         return query
 
     if "$or" in where:
-        # Firestore doesn't support OR natively in the same way.
-        # For now, we only apply the first condition and log a warning.
-        logger.warning("$or filters not fully supported in Firestore backend; using first condition only")
-        if where["$or"]:
-            query = _apply_where_filter(query, where["$or"][0])
-        return query
+        or_filters = []
+        for sub in where["$or"]:
+            or_filters.extend(_collect_field_filters(sub))
+        return query.where(filter=Or(filters=or_filters))
 
     for key, value in where.items():
         if key.startswith("$"):
             continue
-        if isinstance(value, dict):
-            if "$in" in value:
-                query = query.where(filter=("meta." + key, "in", value["$in"]))
-            elif "$gte" in value:
-                query = query.where(filter=("meta." + key, ">=", value["$gte"]))
-            elif "$lte" in value:
-                query = query.where(filter=("meta." + key, "<=", value["$lte"]))
-            elif "$ne" in value:
-                query = query.where(filter=("meta." + key, "!=", value["$ne"]))
-        else:
-            query = query.where(filter=("meta." + key, "==", value))
+        query = query.where(filter=_build_field_filter(key, value))
 
     return query
+
+
+def _matches_where_document(doc_text: str, where_document: Dict[str, Any]) -> bool:
+    """Evaluate a ChromaDB where_document filter against document text.
+
+    Supports:
+      {"$contains": "substring"}         — text contains substring
+      {"$not_contains": "substring"}     — text does not contain substring
+      {"$and": [{...}, {...}]}           — all conditions match
+      {"$or": [{...}, {...}]}            — any condition matches
+    """
+    if "$and" in where_document:
+        return all(_matches_where_document(doc_text, sub) for sub in where_document["$and"])
+    if "$or" in where_document:
+        return any(_matches_where_document(doc_text, sub) for sub in where_document["$or"])
+    if "$contains" in where_document:
+        return where_document["$contains"] in doc_text
+    if "$not_contains" in where_document:
+        return where_document["$not_contains"] not in doc_text
+    return False
 
 
 class FirestoreCollection(BaseCollection):
@@ -150,12 +213,16 @@ class FirestoreCollection(BaseCollection):
         embeddings = self._embed(documents)
         writer = self._batch()
         for i, doc_id in enumerate(ids):
+            doc_ref = self._col.document(doc_id)
+            # ChromaDB silently ignores duplicate IDs — skip if doc exists.
+            if doc_ref.get().exists:
+                continue
             data = {
                 "document": documents[i],
                 "embedding": Vector(embeddings[i]),
                 "meta": metadatas[i] if metadatas and i < len(metadatas) else {},
             }
-            writer.set(self._col.document(doc_id), data)
+            writer.set(doc_ref, data)
         writer.commit()
 
     def upsert(self, *, documents: List[str], ids: List[str],
@@ -174,7 +241,10 @@ class FirestoreCollection(BaseCollection):
     def update(self, *, ids: List[str],
                documents: Optional[List[str]] = None,
                metadatas: Optional[List[Dict[str, Any]]] = None) -> None:
-        """Update existing documents (not in BaseCollection, but used by mcp_server)."""
+        """Update existing documents (not in BaseCollection, but used by mcp_server).
+
+        ChromaDB silently skips nonexistent IDs — we check existence first.
+        """
         embeddings = None
         if documents:
             embeddings = self._embed(documents)
@@ -188,7 +258,11 @@ class FirestoreCollection(BaseCollection):
             if metadatas and i < len(metadatas):
                 updates["meta"] = metadatas[i]
             if updates:
-                writer.update(self._col.document(doc_id), updates)
+                doc_ref = self._col.document(doc_id)
+                # ChromaDB silently ignores updates to nonexistent docs.
+                if not doc_ref.get().exists:
+                    continue
+                writer.update(doc_ref, updates)
         writer.commit()
 
     def query(self, **kwargs) -> Dict[str, Any]:
@@ -199,6 +273,11 @@ class FirestoreCollection(BaseCollection):
           n_results: int          — max results
           include: List[str]      — which fields to return
           where: dict             — optional metadata filter
+
+        Returns one result set per query text (nested lists), matching
+        the ChromaDB response shape::
+
+            {"ids": [["a"], ["b"]], "distances": [[0.2], [0.3]]}
         """
         query_texts = kwargs.get("query_texts", [])
         n_results = kwargs.get("n_results", 5)
@@ -208,42 +287,51 @@ class FirestoreCollection(BaseCollection):
         if not query_texts:
             return {"ids": [[]], "documents": [[]], "metadatas": [[]], "distances": [[]]}
 
-        query_embedding = self._embed(query_texts[:1])[0]
+        query_embeddings = self._embed(query_texts)
 
-        q = self._col
-        if where:
-            q = _apply_where_filter(q, where)
+        all_ids: List[List[str]] = []
+        all_documents: List[List[str]] = []
+        all_metadatas: List[List[Dict[str, Any]]] = []
+        all_distances: List[List[float]] = []
 
-        results = q.find_nearest(
-            vector_field="embedding",
-            query_vector=Vector(query_embedding),
-            distance_measure=DistanceMeasure.COSINE,
-            limit=n_results,
-            distance_result_field="vector_distance",
-        ).get()
+        for query_embedding in query_embeddings:
+            q = self._col
+            if where:
+                q = _apply_where_filter(q, where)
 
-        ids = []
-        documents = []
-        metadatas = []
-        distances = []
+            results = q.find_nearest(
+                vector_field="embedding",
+                query_vector=Vector(query_embedding),
+                distance_measure=DistanceMeasure.COSINE,
+                limit=n_results,
+                distance_result_field="vector_distance",
+            ).get()
 
-        for doc_snap in results:
-            data = doc_snap.to_dict()
-            ids.append(doc_snap.id)
-            if "documents" in include:
-                documents.append(data.get("document", ""))
-            if "metadatas" in include:
-                metadatas.append(data.get("meta", {}))
-            if "distances" in include:
-                distances.append(data.get("vector_distance", 1.0))
+            ids: List[str] = []
+            documents: List[str] = []
+            metadatas: List[Dict[str, Any]] = []
+            distances: List[float] = []
 
-        result = {"ids": [ids]}
-        if "documents" in include:
-            result["documents"] = [documents]
-        if "metadatas" in include:
-            result["metadatas"] = [metadatas]
-        if "distances" in include:
-            result["distances"] = [distances]
+            for doc_snap in results:
+                data = doc_snap.to_dict()
+                ids.append(doc_snap.id)
+                if "documents" in include:
+                    documents.append(data.get("document", ""))
+                if "metadatas" in include:
+                    metadatas.append(data.get("meta", {}))
+                if "distances" in include:
+                    distances.append(data.get("vector_distance", 1.0))
+
+            all_ids.append(ids)
+            all_documents.append(documents)
+            all_metadatas.append(metadatas)
+            all_distances.append(distances)
+
+        # ChromaDB always returns all keys; non-included fields are None.
+        result: Dict[str, Any] = {"ids": all_ids}
+        result["documents"] = all_documents if "documents" in include else None
+        result["metadatas"] = all_metadatas if "metadatas" in include else None
+        result["distances"] = all_distances if "distances" in include else None
 
         return result
 
@@ -256,6 +344,9 @@ class FirestoreCollection(BaseCollection):
           include: List[str]      — which fields to return
           limit: int              — max results
           offset: int             — skip first N results
+
+        ChromaDB raises ValueError on ``ids=[]``. Non-included fields
+        are returned as ``None`` (not omitted).
         """
         doc_ids = kwargs.get("ids")
         where = kwargs.get("where")
@@ -263,14 +354,18 @@ class FirestoreCollection(BaseCollection):
         limit = kwargs.get("limit")
         offset = kwargs.get("offset", 0)
 
+        if doc_ids is not None and len(doc_ids) == 0:
+            raise ValueError("Expected IDs to be a non-empty list, got 0 IDs")
+
         snapshots = []
 
         if doc_ids is not None:
-            # Fetch specific documents by ID
-            for doc_id in doc_ids:
-                snap = self._col.document(doc_id).get()
-                if snap.exists:
-                    snapshots.append(snap)
+            # Batch-fetch documents by ID
+            doc_refs = [self._col.document(doc_id) for doc_id in doc_ids]
+            snapshots = [
+                snap for snap in self._col.firestore_client.get_all(doc_refs)
+                if snap.exists
+            ]
         else:
             # Query with optional where filter and pagination
             q = self._col
@@ -294,11 +389,10 @@ class FirestoreCollection(BaseCollection):
             if include and "metadatas" in include:
                 metadatas.append(data.get("meta", {}))
 
-        result = {"ids": ids}
-        if include and "documents" in include:
-            result["documents"] = documents
-        if include and "metadatas" in include:
-            result["metadatas"] = metadatas
+        # ChromaDB always returns all keys; non-included fields are None.
+        result: Dict[str, Any] = {"ids": ids}
+        result["documents"] = documents if (include and "documents" in include) else None
+        result["metadatas"] = metadatas if (include and "metadatas" in include) else None
 
         return result
 
@@ -306,11 +400,28 @@ class FirestoreCollection(BaseCollection):
         """Delete documents by IDs or metadata filter.
 
         Expected kwargs:
-          ids: List[str]    — document IDs to delete
-          where: dict       — metadata filter for bulk delete
+          ids: List[str]           — document IDs to delete
+          where: dict              — metadata filter for bulk delete
+          where_document: dict     — document content filter
+
+        Raises ValueError if none of ids, where, or where_document is provided,
+        matching ChromaDB behaviour. Also raises ValueError on ``ids=[]``
+        and NotImplementedError for ``where_document`` (Firestore cannot do
+        full-text search).
         """
         doc_ids = kwargs.get("ids")
         where = kwargs.get("where")
+        where_document = kwargs.get("where_document")
+
+        # ChromaDB raises on empty ID list
+        if doc_ids is not None and len(doc_ids) == 0:
+            raise ValueError("Expected IDs to be a non-empty list, got 0 IDs")
+
+        if not doc_ids and not where and not where_document:
+            raise ValueError(
+                "At least one of ids, where, or where_document must be "
+                "provided in delete."
+            )
 
         if doc_ids:
             writer = self._batch()
@@ -323,6 +434,15 @@ class FirestoreCollection(BaseCollection):
             writer = self._batch()
             for snap in q.stream():
                 writer.delete(snap.reference)
+            writer.commit()
+        elif where_document:
+            # Firestore has no full-text search. Simulate by streaming all
+            # documents and filtering client-side. O(n) reads.
+            writer = self._batch()
+            for snap in self._col.stream():
+                doc_text = snap.to_dict().get("document", "")
+                if _matches_where_document(doc_text, where_document):
+                    writer.delete(snap.reference)
             writer.commit()
 
     def count(self) -> int:

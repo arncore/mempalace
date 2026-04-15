@@ -22,8 +22,9 @@ Examples::
     kg = FirestoreKnowledgeGraph(db, base_path="projects/myapp")
 """
 
-import hashlib
 from datetime import date, datetime
+
+from google.cloud.firestore_v1.transaction import transactional
 
 
 class FirestoreKnowledgeGraph:
@@ -78,70 +79,74 @@ class FirestoreKnowledgeGraph:
         source_closet: str = None,
         source_file: str = None,
     ):
-        """Add a relationship triple: subject → predicate → object.
+        """Add a relationship triple: subject -> predicate -> object.
 
         Auto-creates entities if they don't exist. Deduplicates: if an
         identical active triple (same subject/predicate/object, valid_to
         is None) already exists, returns its ID without creating a new one.
+
+        Uses a deterministic document ID for active triples and a Firestore
+        transaction for atomic dedup-check + write, preventing race conditions
+        from concurrent adds of the same triple.
         """
         sub_id = self._entity_id(subject)
         obj_id = self._entity_id(obj)
         pred = predicate.lower().replace(" ", "_")
 
-        # Auto-create entities
+        # Auto-create entities (idempotent via merge=True)
         self._entities.document(sub_id).set({"name": subject}, merge=True)
         self._entities.document(obj_id).set({"name": obj}, merge=True)
 
-        # Dedup: check for existing active triple
-        existing = (
-            self._triples
-            .where("subject", "==", sub_id)
-            .where("predicate", "==", pred)
-            .where("object", "==", obj_id)
-            .where("valid_to", "==", None)
-            .limit(1)
-            .get()
-        )
-        if existing:
-            return existing[0].id
+        # Deterministic ID for the active triple
+        triple_id = f"t_{sub_id}_{pred}_{obj_id}"
+        doc_ref = self._triples.document(triple_id)
 
-        triple_id = (
-            f"t_{sub_id}_{pred}_{obj_id}_"
-            f"{hashlib.sha256(f'{valid_from}{datetime.now().isoformat()}'.encode()).hexdigest()[:12]}"
-        )
+        data = {
+            "subject": sub_id,
+            "predicate": pred,
+            "object": obj_id,
+            "valid_from": valid_from,
+            "valid_to": valid_to,
+            "confidence": confidence,
+            "source_closet": source_closet,
+            "source_file": source_file,
+            "extracted_at": datetime.now().isoformat(),
+        }
 
-        self._triples.document(triple_id).set(
-            {
-                "subject": sub_id,
-                "predicate": pred,
-                "object": obj_id,
-                "valid_from": valid_from,
-                "valid_to": valid_to,
-                "confidence": confidence,
-                "source_closet": source_closet,
-                "source_file": source_file,
-                "extracted_at": datetime.now().isoformat(),
-            }
-        )
-        return triple_id
+        @transactional
+        def _add_in_txn(transaction):
+            snap = doc_ref.get(transaction=transaction)
+            if snap.exists and snap.to_dict().get("valid_to") is None:
+                return snap.id
+            transaction.set(doc_ref, data)
+            return triple_id
+
+        transaction = self._db.transaction()
+        return _add_in_txn(transaction)
 
     def invalidate(self, subject: str, predicate: str, obj: str, ended: str = None):
-        """Mark a relationship as no longer valid (set valid_to date)."""
+        """Mark a relationship as no longer valid (set valid_to date).
+
+        Uses a Firestore transaction for atomic read + update, preventing
+        race conditions from concurrent invalidations.
+        """
         sub_id = self._entity_id(subject)
         obj_id = self._entity_id(obj)
         pred = predicate.lower().replace(" ", "_")
         ended = ended or date.today().isoformat()
 
-        triples = (
-            self._triples
-            .where("subject", "==", sub_id)
-            .where("predicate", "==", pred)
-            .where("object", "==", obj_id)
-            .where("valid_to", "==", None)
-            .get()
-        )
-        for t in triples:
-            t.reference.update({"valid_to": ended})
+        # Deterministic ID for the active triple
+        triple_id = f"t_{sub_id}_{pred}_{obj_id}"
+        doc_ref = self._triples.document(triple_id)
+
+        @transactional
+        def _invalidate_in_txn(transaction):
+            snap = doc_ref.get(transaction=transaction)
+            if snap.exists and snap.to_dict().get("valid_to") is None:
+                transaction.update(doc_ref, {"valid_to": ended})
+
+        transaction = self._db.transaction()
+        _invalidate_in_txn(transaction)
 
     # ── Query operations ─────────────────────────────────────────────────
 

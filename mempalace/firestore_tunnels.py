@@ -13,6 +13,8 @@ where tunnels are stored.
 import hashlib
 from datetime import datetime, timezone
 
+from google.cloud.firestore_v1.transaction import transactional
+
 
 def _endpoint_key(wing: str, room: str) -> str:
     return f"{wing}/{room}"
@@ -48,32 +50,42 @@ class FirestoreTunnelStore:
         source_drawer_id: str = None,
         target_drawer_id: str = None,
     ):
-        """Create or update an explicit symmetric tunnel."""
+        """Create or update an explicit symmetric tunnel.
+
+        Uses a Firestore transaction for atomic check-exists + write,
+        preventing race conditions from concurrent tunnel creation.
+        """
         tunnel_id = _canonical_tunnel_id(source_wing, source_room, target_wing, target_room)
         now = datetime.now(timezone.utc).isoformat()
 
         doc_ref = self._col.document(tunnel_id)
-        existing = doc_ref.get()
 
-        tunnel = {
-            "id": tunnel_id,
-            "source": {"wing": source_wing, "room": source_room},
-            "target": {"wing": target_wing, "room": target_room},
-            "label": label,
-        }
-        if source_drawer_id:
-            tunnel["source"]["drawer_id"] = source_drawer_id
-        if target_drawer_id:
-            tunnel["target"]["drawer_id"] = target_drawer_id
+        @transactional
+        def _create_in_txn(transaction):
+            existing = doc_ref.get(transaction=transaction)
 
-        if existing.exists:
-            tunnel["created_at"] = existing.to_dict().get("created_at", now)
-            tunnel["updated_at"] = now
-        else:
-            tunnel["created_at"] = now
+            tunnel = {
+                "id": tunnel_id,
+                "source": {"wing": source_wing, "room": source_room},
+                "target": {"wing": target_wing, "room": target_room},
+                "label": label,
+            }
+            if source_drawer_id:
+                tunnel["source"]["drawer_id"] = source_drawer_id
+            if target_drawer_id:
+                tunnel["target"]["drawer_id"] = target_drawer_id
 
-        doc_ref.set(tunnel)
-        return tunnel
+            if existing.exists:
+                tunnel["created_at"] = existing.to_dict().get("created_at", now)
+                tunnel["updated_at"] = now
+            else:
+                tunnel["created_at"] = now
+
+            transaction.set(doc_ref, tunnel)
+            return tunnel
+
+        transaction = self._db.transaction()
+        return _create_in_txn(transaction)
 
     def list_tunnels(self, wing: str = None):
         """List all explicit tunnels, optionally filtered by wing."""
