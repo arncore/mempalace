@@ -8,8 +8,6 @@ import contextlib
 import hashlib
 import os
 
-from .backends.chroma import ChromaBackend
-
 SKIP_DIRS = {
     ".git",
     "node_modules",
@@ -36,7 +34,36 @@ SKIP_DIRS = {
     "target",
 }
 
-_DEFAULT_BACKEND = ChromaBackend()
+# Lazy-initialized default backend. Use set_backend() to override before
+# first collection access, or set MEMPALACE_BACKEND=firestore env var.
+_DEFAULT_BACKEND = None
+
+
+def _init_default_backend():
+    """Create the default backend based on env config."""
+    backend_type = os.environ.get("MEMPALACE_BACKEND", "chroma").lower()
+    if backend_type == "firestore":
+        from google.cloud import firestore as firestore_mod
+        from .backends.firestore import FirestoreBackend
+        db = firestore_mod.Client()
+        return FirestoreBackend(db)
+    else:
+        from .backends.chroma import ChromaBackend
+        return ChromaBackend()
+
+
+def get_backend():
+    """Return the active backend, initializing from env if needed."""
+    global _DEFAULT_BACKEND
+    if _DEFAULT_BACKEND is None:
+        _DEFAULT_BACKEND = _init_default_backend()
+    return _DEFAULT_BACKEND
+
+
+def set_backend(backend):
+    """Override the default backend. Call before any collection access."""
+    global _DEFAULT_BACKEND
+    _DEFAULT_BACKEND = backend
 
 # Schema version for drawer normalization. Bump when the normalization
 # pipeline changes in a way that existing drawers should be rebuilt to pick up
@@ -55,7 +82,7 @@ def get_collection(
     create: bool = True,
 ):
     """Get the palace collection through the backend layer."""
-    return _DEFAULT_BACKEND.get_collection(
+    return get_backend().get_collection(
         palace_path,
         collection_name=collection_name,
         create=create,
