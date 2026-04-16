@@ -168,17 +168,18 @@ class FirestoreCollection(BaseCollection):
 
     _BATCH_LIMIT = 450  # Firestore batch limit is 500; leave margin
 
-    def __init__(self, col_ref, embed_fn: Callable = None):
+    def __init__(self, col_ref, db_client, embed_fn: Callable = None):
         self._col = col_ref
+        self._db = db_client
         self._embed = embed_fn or default_embed_fn
 
     class _BatchWriter:
         """Auto-chunking batch writer for Firestore."""
 
-        def __init__(self, col_ref, limit: int):
-            self._col = col_ref
+        def __init__(self, db_client, limit: int):
+            self._db = db_client
             self._limit = limit
-            self._batch = col_ref.firestore_client.batch()
+            self._batch = db_client.batch()
             self._count = 0
 
         def set(self, doc_ref, data, merge=False):
@@ -197,7 +198,7 @@ class FirestoreCollection(BaseCollection):
             self._count += 1
             if self._count >= self._limit:
                 self._batch.commit()
-                self._batch = self._col.firestore_client.batch()
+                self._batch = self._db.batch()
                 self._count = 0
 
         def commit(self):
@@ -206,7 +207,7 @@ class FirestoreCollection(BaseCollection):
                 self._count = 0
 
     def _batch(self):
-        return self._BatchWriter(self._col, self._BATCH_LIMIT)
+        return self._BatchWriter(self._db, self._BATCH_LIMIT)
 
     def add(self, *, documents: List[str], ids: List[str],
             metadatas: Optional[List[Dict[str, Any]]] = None) -> None:
@@ -363,7 +364,7 @@ class FirestoreCollection(BaseCollection):
             # Batch-fetch documents by ID
             doc_refs = [self._col.document(doc_id) for doc_id in doc_ids]
             snapshots = [
-                snap for snap in self._col.firestore_client.get_all(doc_refs)
+                snap for snap in self._db.get_all(doc_refs)
                 if snap.exists
             ]
         else:
@@ -491,4 +492,4 @@ class FirestoreBackend:
         (Firestore collections are created implicitly on first write).
         """
         col_ref = self._db.collection(f"{palace_path}/{collection_name}")
-        return FirestoreCollection(col_ref, embed_fn=self._embed)
+        return FirestoreCollection(col_ref, db_client=self._db, embed_fn=self._embed)
