@@ -39,6 +39,37 @@ col = backend.get_collection("projects/myapp", "mempalace_drawers")
 col = backend.get_collection("palace", "mempalace_drawers")
 ```
 
+#### `palace_path` must have an even number of segments
+
+Firestore paths alternate `collection/document/collection/document…`
+Odd-segment paths refer to collections; even-segment paths refer to documents.
+Since `palace_path` is used as a **document-level prefix** — the backend
+appends a collection name (e.g. `mempalace_drawers`) to it — `palace_path`
+must have an **even** number of segments. Passing an odd-segmented
+`palace_path` causes Firestore to reject calls with
+`ValueError: A collection path must have an odd number of components`.
+
+| `palace_path` | Segments | Full path with `mempalace_drawers` appended | OK? |
+|---|---|---|---|
+| `palace` | 1 (odd) | `palace/mempalace_drawers` (2, even) | ❌ |
+| `users/abc123` | 2 (even) | `users/abc123/mempalace_drawers` (3, odd) | ✅ |
+| `users/abc123/memory` | 3 (odd) | `users/abc123/memory/mempalace_drawers` (4, even) | ❌ |
+| `users/abc123/memory/palace` | 4 (even) | `users/abc123/memory/palace/mempalace_drawers` (5, odd) | ✅ |
+
+If you want to nest the palace beneath an intermediate collection (for
+instance, to keep MemPalace's subcollections out of the top-level namespace
+under a user doc), add an explicit virtual anchor document:
+
+```python
+# Nest under users/{id}/memory/<anchor>/…
+col = backend.get_collection("users/abc123/memory/palace", "mempalace_drawers")
+# → Firestore path: users/abc123/memory/palace/mempalace_drawers (5 segs ✅)
+```
+
+The anchor document (`palace` in the example) does not need to be explicitly
+written — Firestore materializes it automatically when the first child
+document is created beneath it.
+
 ### Document Schema
 
 Each document in Firestore:
