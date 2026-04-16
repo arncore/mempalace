@@ -12,6 +12,7 @@ where tunnels are stored.
 
 import hashlib
 from datetime import datetime, timezone
+from typing import Optional
 
 from google.cloud.firestore_v1.transaction import transactional
 
@@ -47,8 +48,8 @@ class FirestoreTunnelStore:
         target_wing: str,
         target_room: str,
         label: str = "",
-        source_drawer_id: str = None,
-        target_drawer_id: str = None,
+        source_drawer_id: Optional[str] = None,
+        target_drawer_id: Optional[str] = None,
     ):
         """Create or update an explicit symmetric tunnel.
 
@@ -87,7 +88,7 @@ class FirestoreTunnelStore:
         transaction = self._db.transaction()
         return _create_in_txn(transaction)
 
-    def list_tunnels(self, wing: str = None):
+    def list_tunnels(self, wing: Optional[str] = None):
         """List all explicit tunnels, optionally filtered by wing."""
         tunnels = []
         for snap in self._col.stream():

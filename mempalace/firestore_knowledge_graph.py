@@ -23,6 +23,7 @@ Examples::
 """
 
 from datetime import date, datetime
+from typing import Optional
 
 from google.cloud.firestore_v1.transaction import transactional
 
@@ -54,7 +55,7 @@ class FirestoreKnowledgeGraph:
 
     # ── Write operations ─────────────────────────────────────────────────
 
-    def add_entity(self, name: str, entity_type: str = "unknown", properties: dict = None):
+    def add_entity(self, name: str, entity_type: str = "unknown", properties: Optional[dict] = None):
         """Add or update an entity node."""
         eid = self._entity_id(name)
         self._entities.document(eid).set(
@@ -73,11 +74,11 @@ class FirestoreKnowledgeGraph:
         subject: str,
         predicate: str,
         obj: str,
-        valid_from: str = None,
-        valid_to: str = None,
+        valid_from: Optional[str] = None,
+        valid_to: Optional[str] = None,
         confidence: float = 1.0,
-        source_closet: str = None,
-        source_file: str = None,
+        source_closet: Optional[str] = None,
+        source_file: Optional[str] = None,
     ):
         """Add a relationship triple: subject -> predicate -> object.
 
@@ -124,7 +125,7 @@ class FirestoreKnowledgeGraph:
         transaction = self._db.transaction()
         return _add_in_txn(transaction)
 
-    def invalidate(self, subject: str, predicate: str, obj: str, ended: str = None):
+    def invalidate(self, subject: str, predicate: str, obj: str, ended: Optional[str] = None):
         """Mark a relationship as no longer valid (set valid_to date).
 
         Uses a Firestore transaction for atomic read + update, preventing
@@ -150,7 +151,7 @@ class FirestoreKnowledgeGraph:
 
     # ── Query operations ─────────────────────────────────────────────────
 
-    def query_entity(self, name: str, as_of: str = None, direction: str = "outgoing"):
+    def query_entity(self, name: str, as_of: Optional[str] = None, direction: str = "outgoing"):
         """Get all relationships for an entity.
 
         direction: "outgoing" (entity → ?), "incoming" (? → entity), "both"
@@ -213,7 +214,7 @@ class FirestoreKnowledgeGraph:
 
         return results
 
-    def query_relationship(self, predicate: str, as_of: str = None):
+    def query_relationship(self, predicate: str, as_of: Optional[str] = None):
         """Get all triples with a given relationship type."""
         pred = predicate.lower().replace(" ", "_")
         query = self._triples.where("predicate", "==", pred)
@@ -241,7 +242,7 @@ class FirestoreKnowledgeGraph:
             )
         return results
 
-    def timeline(self, entity_name: str = None):
+    def timeline(self, entity_name: Optional[str] = None):
         """Get all facts in chronological order, optionally filtered by entity."""
         if entity_name:
             eid = self._entity_id(entity_name)

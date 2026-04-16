@@ -168,7 +168,7 @@ class FirestoreCollection(BaseCollection):
 
     _BATCH_LIMIT = 450  # Firestore batch limit is 500; leave margin
 
-    def __init__(self, col_ref, db_client, embed_fn: Callable = None):
+    def __init__(self, col_ref, db_client, embed_fn: Optional[Callable] = None):
         self._col = col_ref
         self._db = db_client
         self._embed = embed_fn or default_embed_fn
@@ -246,14 +246,14 @@ class FirestoreCollection(BaseCollection):
 
         ChromaDB silently skips nonexistent IDs — we check existence first.
         """
-        embeddings = None
+        embeddings: Optional[List[List[float]]] = None
         if documents:
             embeddings = self._embed(documents)
 
         writer = self._batch()
         for i, doc_id in enumerate(ids):
             updates = {}
-            if documents and i < len(documents):
+            if documents and embeddings and i < len(documents):
                 updates["document"] = documents[i]
                 updates["embedding"] = Vector(embeddings[i])
             if metadatas and i < len(metadatas):
@@ -475,7 +475,7 @@ class FirestoreBackend:
         col = backend.get_collection("palace", "mempalace_drawers")
     """
 
-    def __init__(self, db, embed_fn: Callable = None):
+    def __init__(self, db, embed_fn: Optional[Callable] = None):
         self._db = db
         self._embed = embed_fn or default_embed_fn
 
