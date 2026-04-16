@@ -194,29 +194,72 @@ Tunnel IDs are symmetric: `create_tunnel(A→B)` and `create_tunnel(B→A)` prod
 
 ## Firestore Indexes
 
-You'll need vector indexes for `find_nearest` to work:
+**Important**: If your `palace_path` uses subcollections (e.g. `users/{id}/memory`), use `COLLECTION_GROUP` scope for all composite indexes. The default `COLLECTION` scope only applies to top-level collections and will not be used for queries scoped to subcollection paths — queries will fail at runtime with `FailedPrecondition: The query requires an index`.
 
+### Vector indexes (drawers and closets)
+
+```json
+{
+  "collectionGroup": "mempalace_drawers",
+  "queryScope": "COLLECTION",
+  "fields": [
+    { "fieldPath": "embedding",
+      "vectorConfig": { "dimension": 384, "flat": {} }
+    }
+  ]
+}
 ```
-Collection: {palace_path}/mempalace_drawers
-  Field: embedding
-  Vector config: dimension=384, flat index
 
-Collection: {palace_path}/mempalace_closets
-  Field: embedding
-  Vector config: dimension=384, flat index
+Same shape for `mempalace_closets`. Vector indexes work with `COLLECTION` scope because `find_nearest` targets a specific collection reference, not a collection group.
+
+### Knowledge graph composite indexes
+
+All KG queries combine a `where` clause with `order_by` on a different field, so they require composite indexes. Because triples live at `{base_path}/triples`, use `COLLECTION_GROUP` scope:
+
+```json
+[
+  { "collectionGroup": "triples", "queryScope": "COLLECTION_GROUP",
+    "fields": [
+      { "fieldPath": "subject", "order": "ASCENDING" },
+      { "fieldPath": "valid_to", "order": "ASCENDING" }
+    ]
+  },
+  { "collectionGroup": "triples", "queryScope": "COLLECTION_GROUP",
+    "fields": [
+      { "fieldPath": "object", "order": "ASCENDING" },
+      { "fieldPath": "valid_to", "order": "ASCENDING" }
+    ]
+  },
+  { "collectionGroup": "triples", "queryScope": "COLLECTION_GROUP",
+    "fields": [
+      { "fieldPath": "subject", "order": "ASCENDING" },
+      { "fieldPath": "valid_from", "order": "ASCENDING" }
+    ]
+  },
+  { "collectionGroup": "triples", "queryScope": "COLLECTION_GROUP",
+    "fields": [
+      { "fieldPath": "object", "order": "ASCENDING" },
+      { "fieldPath": "valid_from", "order": "ASCENDING" }
+    ]
+  },
+  { "collectionGroup": "triples", "queryScope": "COLLECTION_GROUP",
+    "fields": [
+      { "fieldPath": "predicate", "order": "ASCENDING" },
+      { "fieldPath": "valid_from", "order": "ASCENDING" }
+    ]
+  }
+]
 ```
 
-For filtered vector search, create composite indexes combining metadata fields with the embedding vector.
+### Deploying indexes
 
-For the knowledge graph, create indexes on the triples collection:
+Put the above in `firestore.indexes.json` and deploy with the Firebase CLI:
 
+```bash
+firebase deploy --only firestore:indexes --project <project-id>
 ```
-Collection: {base_path}/triples
-  Index: subject (ASC)
-  Index: object (ASC)
-  Index: predicate (ASC)
-  Index: valid_from (ASC)
-```
+
+Indexes take several minutes to build on first deployment.
 
 ## Configuration
 
@@ -238,11 +281,53 @@ set_backend(my_backend)
 backend = get_backend()
 ```
 
+## Package Layout
+
+```
+mempalace/backends/firestore/
+  __init__.py           # lazy re-exports (no eager google-cloud-firestore import)
+  collection.py         # FirestoreCollection, FirestoreBackend
+  knowledge_graph.py    # FirestoreKnowledgeGraph
+  tunnels.py            # FirestoreTunnelStore
+```
+
+All public classes are re-exported from `mempalace.backends.firestore`, so normal imports work:
+
+```python
+from mempalace.backends.firestore import (
+    FirestoreBackend,
+    FirestoreCollection,
+    FirestoreKnowledgeGraph,
+    FirestoreTunnelStore,
+)
+```
+
+The `__init__.py` uses `__getattr__` for lazy loading so `google-cloud-firestore` and `sentence-transformers` only get imported if you actually touch the Firestore backend — ChromaDB-only users are unaffected.
+
 ## Testing
 
-128 tests covering all operations, edge cases, and ChromaDB compatibility. All tests mock Firestore — no real SDK needed:
+### Unit tests (mocked)
+
+128 tests cover all operations, edge cases, and ChromaDB compatibility. No real Firestore needed:
 
 ```bash
 python -m pytest tests/test_firestore_backend.py tests/test_firestore_kg.py \
     tests/test_firestore_tunnels.py tests/test_palace_backend_config.py -v
 ```
+
+### Static type checking
+
+Pyright is run in CI over all Firestore files. Run locally with:
+
+```bash
+pip install pyright google-cloud-firestore sentence-transformers
+pyright
+```
+
+`pyrightconfig.json` is scoped to the Firestore files only — ChromaDB code is not type-checked.
+
+### Integration tests
+
+End-to-end tests against a live Firestore database are documented in
+[`FIRESTORE_INTEGRATION_TEST_RESULTS.md`](./FIRESTORE_INTEGRATION_TEST_RESULTS.md),
+including a complete drag-and-drop FastAPI reference server.
