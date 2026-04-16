@@ -32,7 +32,7 @@ sys.modules.setdefault("google.cloud", MagicMock())
 sys.modules.setdefault("google.cloud.firestore_v1", MagicMock())
 sys.modules.setdefault("google.cloud.firestore_v1.transaction", _mock_txn_module)
 
-from mempalace.firestore_tunnels import (  # noqa: E402
+from mempalace.backends.firestore.tunnels import (  # noqa: E402
     FirestoreTunnelStore,
     _canonical_tunnel_id,
     _endpoint_key,
@@ -75,7 +75,7 @@ class TestCreateTunnel:
         doc_ref.get.return_value = _make_doc_snapshot("tid", None, exists=False)
         store._col.document.return_value = doc_ref
 
-        result = store.create_tunnel(
+        store.create_tunnel(
             source_wing="project",
             source_room="backend",
             target_wing="notes",
@@ -101,9 +101,11 @@ class TestCreateTunnel:
         doc_ref.get.return_value = _make_doc_snapshot("tid", None, exists=False)
         store._col.document.return_value = doc_ref
 
-        result = store.create_tunnel(
-            source_wing="a", source_room="b",
-            target_wing="c", target_room="d",
+        store.create_tunnel(
+            source_wing="a",
+            source_room="b",
+            target_wing="c",
+            target_room="d",
             source_drawer_id="drawer_1",
             target_drawer_id="drawer_2",
         )
@@ -123,9 +125,11 @@ class TestCreateTunnel:
         doc_ref.get.return_value = _make_doc_snapshot("tid", existing_data, exists=True)
         store._col.document.return_value = doc_ref
 
-        result = store.create_tunnel(
-            source_wing="a", source_room="b",
-            target_wing="c", target_room="d",
+        store.create_tunnel(
+            source_wing="a",
+            source_room="b",
+            target_wing="c",
+            target_room="d",
             label="updated",
         )
 
@@ -149,18 +153,24 @@ class TestCreateTunnel:
 
 class TestListTunnels:
     def test_returns_all(self, store):
-        t1 = _make_doc_snapshot("t1", {
-            "id": "t1",
-            "source": {"wing": "a", "room": "x"},
-            "target": {"wing": "b", "room": "y"},
-            "label": "",
-        })
-        t2 = _make_doc_snapshot("t2", {
-            "id": "t2",
-            "source": {"wing": "c", "room": "z"},
-            "target": {"wing": "d", "room": "w"},
-            "label": "",
-        })
+        t1 = _make_doc_snapshot(
+            "t1",
+            {
+                "id": "t1",
+                "source": {"wing": "a", "room": "x"},
+                "target": {"wing": "b", "room": "y"},
+                "label": "",
+            },
+        )
+        t2 = _make_doc_snapshot(
+            "t2",
+            {
+                "id": "t2",
+                "source": {"wing": "c", "room": "z"},
+                "target": {"wing": "d", "room": "w"},
+                "label": "",
+            },
+        )
         store._col.stream.return_value = [t1, t2]
 
         result = store.list_tunnels()
@@ -168,14 +178,20 @@ class TestListTunnels:
         assert len(result) == 2
 
     def test_filtered_by_wing_source(self, store):
-        t1 = _make_doc_snapshot("t1", {
-            "source": {"wing": "project", "room": "backend"},
-            "target": {"wing": "notes", "room": "planning"},
-        })
-        t2 = _make_doc_snapshot("t2", {
-            "source": {"wing": "other", "room": "x"},
-            "target": {"wing": "other2", "room": "y"},
-        })
+        t1 = _make_doc_snapshot(
+            "t1",
+            {
+                "source": {"wing": "project", "room": "backend"},
+                "target": {"wing": "notes", "room": "planning"},
+            },
+        )
+        t2 = _make_doc_snapshot(
+            "t2",
+            {
+                "source": {"wing": "other", "room": "x"},
+                "target": {"wing": "other2", "room": "y"},
+            },
+        )
         store._col.stream.return_value = [t1, t2]
 
         result = store.list_tunnels(wing="project")
@@ -184,10 +200,13 @@ class TestListTunnels:
         assert result[0]["source"]["wing"] == "project"
 
     def test_filtered_by_wing_target(self, store):
-        t1 = _make_doc_snapshot("t1", {
-            "source": {"wing": "other", "room": "x"},
-            "target": {"wing": "project", "room": "backend"},
-        })
+        t1 = _make_doc_snapshot(
+            "t1",
+            {
+                "source": {"wing": "other", "room": "x"},
+                "target": {"wing": "project", "room": "backend"},
+            },
+        )
         store._col.stream.return_value = [t1]
 
         result = store.list_tunnels(wing="project")
@@ -195,10 +214,13 @@ class TestListTunnels:
         assert len(result) == 1
 
     def test_no_matches_returns_empty(self, store):
-        t1 = _make_doc_snapshot("t1", {
-            "source": {"wing": "a", "room": "x"},
-            "target": {"wing": "b", "room": "y"},
-        })
+        t1 = _make_doc_snapshot(
+            "t1",
+            {
+                "source": {"wing": "a", "room": "x"},
+                "target": {"wing": "b", "room": "y"},
+            },
+        )
         store._col.stream.return_value = [t1]
 
         result = store.list_tunnels(wing="nonexistent")
@@ -221,7 +243,7 @@ class TestListTunnels:
 
 class TestDeleteTunnel:
     def test_removes_by_id(self, store):
-        result = store.delete_tunnel("abc123")
+        store.delete_tunnel("abc123")
 
         store._col.document("abc123").delete.assert_called_once()
 
@@ -238,12 +260,15 @@ class TestDeleteTunnel:
 
 class TestFollowTunnels:
     def test_finds_outgoing(self, store):
-        t1 = _make_doc_snapshot("t1", {
-            "id": "t1",
-            "source": {"wing": "project", "room": "backend"},
-            "target": {"wing": "notes", "room": "planning"},
-            "label": "related",
-        })
+        t1 = _make_doc_snapshot(
+            "t1",
+            {
+                "id": "t1",
+                "source": {"wing": "project", "room": "backend"},
+                "target": {"wing": "notes", "room": "planning"},
+                "label": "related",
+            },
+        )
         store._col.stream.return_value = [t1]
 
         result = store.follow_tunnels("project", "backend")
@@ -255,12 +280,15 @@ class TestFollowTunnels:
         assert result[0]["label"] == "related"
 
     def test_finds_incoming(self, store):
-        t1 = _make_doc_snapshot("t1", {
-            "id": "t1",
-            "source": {"wing": "other", "room": "stuff"},
-            "target": {"wing": "project", "room": "backend"},
-            "label": "depends",
-        })
+        t1 = _make_doc_snapshot(
+            "t1",
+            {
+                "id": "t1",
+                "source": {"wing": "other", "room": "stuff"},
+                "target": {"wing": "project", "room": "backend"},
+                "label": "depends",
+            },
+        )
         store._col.stream.return_value = [t1]
 
         result = store.follow_tunnels("project", "backend")
@@ -271,12 +299,15 @@ class TestFollowTunnels:
         assert result[0]["connected_room"] == "stuff"
 
     def test_with_drawer_previews(self, store):
-        t1 = _make_doc_snapshot("t1", {
-            "id": "t1",
-            "source": {"wing": "project", "room": "backend"},
-            "target": {"wing": "notes", "room": "planning", "drawer_id": "d1"},
-            "label": "",
-        })
+        t1 = _make_doc_snapshot(
+            "t1",
+            {
+                "id": "t1",
+                "source": {"wing": "project", "room": "backend"},
+                "target": {"wing": "notes", "room": "planning", "drawer_id": "d1"},
+                "label": "",
+            },
+        )
         store._col.stream.return_value = [t1]
 
         drawers_col = MagicMock()
@@ -293,12 +324,15 @@ class TestFollowTunnels:
 
     def test_preview_fetch_fails_gracefully(self, store):
         """If drawers_col.get raises an exception, connections still returned without previews."""
-        t1 = _make_doc_snapshot("t1", {
-            "id": "t1",
-            "source": {"wing": "project", "room": "backend"},
-            "target": {"wing": "notes", "room": "planning", "drawer_id": "d1"},
-            "label": "related",
-        })
+        t1 = _make_doc_snapshot(
+            "t1",
+            {
+                "id": "t1",
+                "source": {"wing": "project", "room": "backend"},
+                "target": {"wing": "notes", "room": "planning", "drawer_id": "d1"},
+                "label": "related",
+            },
+        )
         store._col.stream.return_value = [t1]
 
         drawers_col = MagicMock()
@@ -312,12 +346,15 @@ class TestFollowTunnels:
         assert "drawer_preview" not in result[0]
 
     def test_no_connections_returns_empty(self, store):
-        t1 = _make_doc_snapshot("t1", {
-            "id": "t1",
-            "source": {"wing": "other", "room": "x"},
-            "target": {"wing": "other2", "room": "y"},
-            "label": "",
-        })
+        t1 = _make_doc_snapshot(
+            "t1",
+            {
+                "id": "t1",
+                "source": {"wing": "other", "room": "x"},
+                "target": {"wing": "other2", "room": "y"},
+                "label": "",
+            },
+        )
         store._col.stream.return_value = [t1]
 
         result = store.follow_tunnels("project", "backend")

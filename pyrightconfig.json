@@ -1,0 +1,11 @@
+{
+  "include": [
+    "mempalace/backends/firestore/collection.py",
+    "mempalace/backends/firestore/knowledge_graph.py",
+    "mempalace/backends/firestore/tunnels.py",
+    "mempalace/palace.py"
+  ],
+  "pythonVersion": "3.9",
+  "typeCheckingMode": "basic",
+  "reportMissingImports": "warning"
+}

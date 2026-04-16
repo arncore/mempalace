@@ -27,6 +27,7 @@ class TestGetBackendDefaults:
             backend = get_backend()
 
         from mempalace.backends.chroma import ChromaBackend
+
         assert isinstance(backend, ChromaBackend)
 
     @patch.dict(os.environ, {"MEMPALACE_BACKEND": "firestore"})
@@ -38,6 +39,7 @@ class TestGetBackendDefaults:
         with patch("mempalace.palace._init_default_backend") as mock_init:
             # Simulate what _init_default_backend would return
             from mempalace.backends.firestore import FirestoreBackend
+
             fake_backend = FirestoreBackend(mock_client, embed_fn=lambda x: [[0.0] * 3] * len(x))
             mock_init.return_value = fake_backend
 

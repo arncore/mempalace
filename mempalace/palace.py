@@ -43,12 +43,14 @@ def _init_default_backend():
     """Create the default backend based on env config."""
     backend_type = os.environ.get("MEMPALACE_BACKEND", "chroma").lower()
     if backend_type == "firestore":
-        from google.cloud import firestore as firestore_mod
-        from .backends.firestore import FirestoreBackend
+        from google.cloud import firestore as firestore_mod  # type: ignore[attr-defined]
+        from .backends.firestore.collection import FirestoreBackend
+
         db = firestore_mod.Client()
         return FirestoreBackend(db)
     else:
         from .backends.chroma import ChromaBackend
+
         return ChromaBackend()
 
 
@@ -64,6 +66,7 @@ def set_backend(backend):
     """Override the default backend. Call before any collection access."""
     global _DEFAULT_BACKEND
     _DEFAULT_BACKEND = backend
+
 
 # Schema version for drawer normalization. Bump when the normalization
 # pipeline changes in a way that existing drawers should be rebuilt to pick up

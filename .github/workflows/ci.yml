@@ -46,6 +46,16 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-      - run: pip install "ruff>=0.4.0,<0.5"
+      - run: pip install "ruff>=0.15.0,<1"
       - run: ruff check .
       - run: ruff format --check .
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install pyright google-cloud-firestore sentence-transformers
+      - run: pyright
