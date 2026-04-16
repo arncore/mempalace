@@ -209,8 +209,13 @@ class FirestoreCollection(BaseCollection):
     def _batch(self):
         return self._BatchWriter(self._db, self._BATCH_LIMIT)
 
-    def add(self, *, documents: List[str], ids: List[str],
-            metadatas: Optional[List[Dict[str, Any]]] = None) -> None:
+    def add(
+        self,
+        *,
+        documents: List[str],
+        ids: List[str],
+        metadatas: Optional[List[Dict[str, Any]]] = None,
+    ) -> None:
         embeddings = self._embed(documents)
         writer = self._batch()
         for i, doc_id in enumerate(ids):
@@ -226,8 +231,13 @@ class FirestoreCollection(BaseCollection):
             writer.set(doc_ref, data)
         writer.commit()
 
-    def upsert(self, *, documents: List[str], ids: List[str],
-               metadatas: Optional[List[Dict[str, Any]]] = None) -> None:
+    def upsert(
+        self,
+        *,
+        documents: List[str],
+        ids: List[str],
+        metadatas: Optional[List[Dict[str, Any]]] = None,
+    ) -> None:
         embeddings = self._embed(documents)
         writer = self._batch()
         for i, doc_id in enumerate(ids):
@@ -239,9 +249,13 @@ class FirestoreCollection(BaseCollection):
             writer.set(self._col.document(doc_id), data, merge=True)
         writer.commit()
 
-    def update(self, *, ids: List[str],
-               documents: Optional[List[str]] = None,
-               metadatas: Optional[List[Dict[str, Any]]] = None) -> None:
+    def update(
+        self,
+        *,
+        ids: List[str],
+        documents: Optional[List[str]] = None,
+        metadatas: Optional[List[Dict[str, Any]]] = None,
+    ) -> None:
         """Update existing documents (not in BaseCollection, but used by mcp_server).
 
         ChromaDB silently skips nonexistent IDs — we check existence first.
@@ -363,10 +377,7 @@ class FirestoreCollection(BaseCollection):
         if doc_ids is not None:
             # Batch-fetch documents by ID
             doc_refs = [self._col.document(doc_id) for doc_id in doc_ids]
-            snapshots = [
-                snap for snap in self._db.get_all(doc_refs)
-                if snap.exists
-            ]
+            snapshots = [snap for snap in self._db.get_all(doc_refs) if snap.exists]
         else:
             # Query with optional where filter and pagination
             q = self._col
@@ -420,8 +431,7 @@ class FirestoreCollection(BaseCollection):
 
         if not doc_ids and not where and not where_document:
             raise ValueError(
-                "At least one of ids, where, or where_document must be "
-                "provided in delete."
+                "At least one of ids, where, or where_document must be provided in delete."
             )
 
         if doc_ids:

@@ -55,7 +55,9 @@ class FirestoreKnowledgeGraph:
 
     # ── Write operations ─────────────────────────────────────────────────
 
-    def add_entity(self, name: str, entity_type: str = "unknown", properties: Optional[dict] = None):
+    def add_entity(
+        self, name: str, entity_type: str = "unknown", properties: Optional[dict] = None
+    ):
         """Add or update an entity node."""
         eid = self._entity_id(name)
         self._entities.document(eid).set(
@@ -249,22 +251,14 @@ class FirestoreKnowledgeGraph:
             # Firestore can't do OR on different fields, so we query both
             # and merge.
             outgoing = list(
-                self._triples.where("subject", "==", eid)
-                .order_by("valid_from")
-                .limit(100)
-                .stream()
+                self._triples.where("subject", "==", eid).order_by("valid_from").limit(100).stream()
             )
             incoming = list(
-                self._triples.where("object", "==", eid)
-                .order_by("valid_from")
-                .limit(100)
-                .stream()
+                self._triples.where("object", "==", eid).order_by("valid_from").limit(100).stream()
             )
             rows = outgoing + incoming
         else:
-            rows = list(
-                self._triples.order_by("valid_from").limit(100).stream()
-            )
+            rows = list(self._triples.order_by("valid_from").limit(100).stream())
 
         results = []
         for row in rows:

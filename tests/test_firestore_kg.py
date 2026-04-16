@@ -141,9 +141,7 @@ class TestAddTriple:
     def _setup_no_existing(self, kg):
         """Configure the doc get inside the transaction to return non-existent."""
         triple_doc = kg._triples.document("t_alice_knows_bob")
-        triple_doc.get.return_value = _make_doc_snapshot(
-            "t_alice_knows_bob", None, exists=False
-        )
+        triple_doc.get.return_value = _make_doc_snapshot("t_alice_knows_bob", None, exists=False)
 
     def test_auto_creates_entities(self, kg):
         self._setup_no_existing(kg)
@@ -200,8 +198,11 @@ class TestAddTriple:
         )
 
         tid = kg.add_triple(
-            "Alice", "works_at", "Acme",
-            valid_from="2020-01-01", valid_to="2024-12-31",
+            "Alice",
+            "works_at",
+            "Acme",
+            valid_from="2020-01-01",
+            valid_to="2024-12-31",
         )
 
         assert tid == "t_alice_works_at_acme"
@@ -215,15 +216,15 @@ class TestAddTriple:
     def test_same_subject_predicate_different_object(self, kg):
         """Alice->likes->Rock and Alice->likes->Jazz are different triples."""
         # First triple: no existing
-        kg._triples.document("t_alice_likes_rock").get.return_value = (
-            _make_doc_snapshot("t_alice_likes_rock", None, exists=False)
+        kg._triples.document("t_alice_likes_rock").get.return_value = _make_doc_snapshot(
+            "t_alice_likes_rock", None, exists=False
         )
 
         tid1 = kg.add_triple("Alice", "likes", "Rock")
 
         # Second triple: no existing
-        kg._triples.document("t_alice_likes_jazz").get.return_value = (
-            _make_doc_snapshot("t_alice_likes_jazz", None, exists=False)
+        kg._triples.document("t_alice_likes_jazz").get.return_value = _make_doc_snapshot(
+            "t_alice_likes_jazz", None, exists=False
         )
 
         tid2 = kg.add_triple("Alice", "likes", "Jazz")
@@ -237,19 +238,17 @@ class TestAddTriple:
         triple are serialized — the second sees the first's write and returns
         the existing ID instead of creating a duplicate."""
         # First call: doc doesn't exist yet
-        kg._triples.document("t_alice_knows_bob").get.return_value = (
-            _make_doc_snapshot("t_alice_knows_bob", None, exists=False)
+        kg._triples.document("t_alice_knows_bob").get.return_value = _make_doc_snapshot(
+            "t_alice_knows_bob", None, exists=False
         )
 
         tid1 = kg.add_triple("Alice", "knows", "Bob")
 
         # Second call: doc now exists (from the first transaction)
-        kg._triples.document("t_alice_knows_bob").get.return_value = (
-            _make_doc_snapshot(
-                "t_alice_knows_bob",
-                {"valid_to": None, "subject": "alice", "predicate": "knows", "object": "bob"},
-                exists=True,
-            )
+        kg._triples.document("t_alice_knows_bob").get.return_value = _make_doc_snapshot(
+            "t_alice_knows_bob",
+            {"valid_to": None, "subject": "alice", "predicate": "knows", "object": "bob"},
+            exists=True,
         )
 
         tid2 = kg.add_triple("Alice", "knows", "Bob")
@@ -305,7 +304,12 @@ class TestInvalidate:
         """If the triple already has a valid_to, don't overwrite it."""
         snap = _make_doc_snapshot(
             "t_alice_works_at_acme",
-            {"valid_to": "2024-06-01", "subject": "alice", "predicate": "works_at", "object": "acme"},
+            {
+                "valid_to": "2024-06-01",
+                "subject": "alice",
+                "predicate": "works_at",
+                "object": "acme",
+            },
         )
         kg._triples.document("t_alice_works_at_acme").get.return_value = snap
 
@@ -335,15 +339,17 @@ class TestQueryEntity:
     def test_outgoing_direction(self, kg):
         self._setup_entity_name(kg, "bob", "Bob")
 
-        triple = self._make_triple_snap({
-            "subject": "alice",
-            "predicate": "knows",
-            "object": "bob",
-            "valid_from": "2020-01-01",
-            "valid_to": None,
-            "confidence": 0.9,
-            "source_closet": None,
-        })
+        triple = self._make_triple_snap(
+            {
+                "subject": "alice",
+                "predicate": "knows",
+                "object": "bob",
+                "valid_from": "2020-01-01",
+                "valid_to": None,
+                "confidence": 0.9,
+                "source_closet": None,
+            }
+        )
 
         outgoing_query = MagicMock()
         outgoing_query.stream.return_value = [triple]
@@ -361,15 +367,17 @@ class TestQueryEntity:
     def test_incoming_direction(self, kg):
         self._setup_entity_name(kg, "charlie", "Charlie")
 
-        triple = self._make_triple_snap({
-            "subject": "charlie",
-            "predicate": "follows",
-            "object": "alice",
-            "valid_from": None,
-            "valid_to": None,
-            "confidence": 1.0,
-            "source_closet": None,
-        })
+        triple = self._make_triple_snap(
+            {
+                "subject": "charlie",
+                "predicate": "follows",
+                "object": "alice",
+                "valid_from": None,
+                "valid_to": None,
+                "confidence": 1.0,
+                "source_closet": None,
+            }
+        )
 
         incoming_query = MagicMock()
         incoming_query.stream.return_value = [triple]
@@ -386,24 +394,28 @@ class TestQueryEntity:
         self._setup_entity_name(kg, "bob", "Bob")
         self._setup_entity_name(kg, "charlie", "Charlie")
 
-        out_triple = self._make_triple_snap({
-            "subject": "alice",
-            "predicate": "knows",
-            "object": "bob",
-            "valid_from": None,
-            "valid_to": None,
-            "confidence": 1.0,
-            "source_closet": None,
-        })
-        in_triple = self._make_triple_snap({
-            "subject": "charlie",
-            "predicate": "follows",
-            "object": "alice",
-            "valid_from": None,
-            "valid_to": None,
-            "confidence": 1.0,
-            "source_closet": None,
-        })
+        out_triple = self._make_triple_snap(
+            {
+                "subject": "alice",
+                "predicate": "knows",
+                "object": "bob",
+                "valid_from": None,
+                "valid_to": None,
+                "confidence": 1.0,
+                "source_closet": None,
+            }
+        )
+        in_triple = self._make_triple_snap(
+            {
+                "subject": "charlie",
+                "predicate": "follows",
+                "object": "alice",
+                "valid_from": None,
+                "valid_to": None,
+                "confidence": 1.0,
+                "source_closet": None,
+            }
+        )
 
         out_q = MagicMock()
         out_q.stream.return_value = [out_triple]
@@ -446,33 +458,39 @@ class TestQueryEntity:
         self._setup_entity_name(kg, "charlie", "Charlie")
         self._setup_entity_name(kg, "dave", "Dave")
 
-        current = self._make_triple_snap({
-            "subject": "alice",
-            "predicate": "knows",
-            "object": "bob",
-            "valid_from": "2020-01-01",
-            "valid_to": None,
-            "confidence": 1.0,
-            "source_closet": None,
-        })
-        future = self._make_triple_snap({
-            "subject": "alice",
-            "predicate": "knows",
-            "object": "charlie",
-            "valid_from": "2030-01-01",
-            "valid_to": None,
-            "confidence": 1.0,
-            "source_closet": None,
-        })
-        expired = self._make_triple_snap({
-            "subject": "alice",
-            "predicate": "knows",
-            "object": "dave",
-            "valid_from": "2015-01-01",
-            "valid_to": "2019-12-31",
-            "confidence": 1.0,
-            "source_closet": None,
-        })
+        current = self._make_triple_snap(
+            {
+                "subject": "alice",
+                "predicate": "knows",
+                "object": "bob",
+                "valid_from": "2020-01-01",
+                "valid_to": None,
+                "confidence": 1.0,
+                "source_closet": None,
+            }
+        )
+        future = self._make_triple_snap(
+            {
+                "subject": "alice",
+                "predicate": "knows",
+                "object": "charlie",
+                "valid_from": "2030-01-01",
+                "valid_to": None,
+                "confidence": 1.0,
+                "source_closet": None,
+            }
+        )
+        expired = self._make_triple_snap(
+            {
+                "subject": "alice",
+                "predicate": "knows",
+                "object": "dave",
+                "valid_from": "2015-01-01",
+                "valid_to": "2019-12-31",
+                "confidence": 1.0,
+                "source_closet": None,
+            }
+        )
 
         q = MagicMock()
         q.stream.return_value = [current, future, expired]
@@ -528,7 +546,12 @@ class TestQueryRelationship:
         kg._triples.where.return_value = q
 
         # Wire up entity name resolution
-        for eid, name in [("alice", "Alice"), ("bob", "Bob"), ("charlie", "Charlie"), ("dave", "Dave")]:
+        for eid, name in [
+            ("alice", "Alice"),
+            ("bob", "Bob"),
+            ("charlie", "Charlie"),
+            ("dave", "Dave"),
+        ]:
             s = _make_doc_snapshot(eid, {"name": name})
             kg._entities.document(eid).get.return_value = s
 
@@ -714,8 +737,8 @@ class TestTransactions:
     def test_add_triple_uses_transaction(self, kg, mock_db):
         """add_triple should use db.transaction() for atomic dedup + write."""
         # Setup: no existing active triple
-        kg._triples.document("t_alice_knows_bob").get.return_value = (
-            _make_doc_snapshot("t_alice_knows_bob", None, exists=False)
+        kg._triples.document("t_alice_knows_bob").get.return_value = _make_doc_snapshot(
+            "t_alice_knows_bob", None, exists=False
         )
 
         kg.add_triple("Alice", "knows", "Bob")

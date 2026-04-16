@@ -5,7 +5,7 @@ Tests are written to match ChromaDB's actual behaviour (verified experimentally)
 """
 
 import sys
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -72,9 +72,7 @@ _mock_firestore_v1.base_query.FieldFilter = _FakeFieldFilter
 _mock_firestore_v1.base_query.Or = _FakeOr
 
 sys.modules.setdefault("google.cloud.firestore_v1", _mock_firestore_v1)
-sys.modules.setdefault(
-    "google.cloud.firestore_v1.base_query", _mock_firestore_v1.base_query
-)
+sys.modules.setdefault("google.cloud.firestore_v1.base_query", _mock_firestore_v1.base_query)
 sys.modules.setdefault(
     "google.cloud.firestore_v1.base_vector_query", _mock_firestore_v1.base_vector_query
 )
@@ -108,11 +106,12 @@ def _fake_embed(texts):
 
 
 def _make_col_ref():
-    """Build a mock Firestore CollectionReference with a chained client."""
+    """Build a mock Firestore CollectionReference and a mock db client."""
     col_ref = MagicMock()
+    db_client = MagicMock()
     batch_mock = MagicMock()
-    col_ref.firestore_client.batch.return_value = batch_mock
-    return col_ref, batch_mock
+    db_client.batch.return_value = batch_mock
+    return col_ref, db_client, batch_mock
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -124,15 +123,15 @@ class TestBatchWriter:
     """FirestoreCollection._BatchWriter auto-chunking behaviour."""
 
     def _make_writer(self, limit=450):
-        col_ref, batch_mock = _make_col_ref()
-        writer = FirestoreCollection._BatchWriter(col_ref, limit)
-        return writer, col_ref, batch_mock
+        col_ref, db_client, batch_mock = _make_col_ref()
+        writer = FirestoreCollection._BatchWriter(db_client, limit)
+        return writer, col_ref, db_client, batch_mock
 
     def test_commits_at_limit(self):
         """Batch commits exactly when count reaches the limit (450)."""
-        writer, col_ref, first_batch = self._make_writer(limit=450)
+        writer, col_ref, db_client, first_batch = self._make_writer(limit=450)
         second_batch = MagicMock()
-        col_ref.firestore_client.batch.side_effect = [second_batch]
+        db_client.batch.side_effect = [second_batch]
 
         doc_ref = MagicMock()
         for _ in range(450):
@@ -145,13 +144,13 @@ class TestBatchWriter:
 
     def test_zero_operations(self):
         """Commit with 0 operations is a no-op."""
-        writer, _, batch_mock = self._make_writer()
+        writer, _, _, batch_mock = self._make_writer()
         writer.commit()
         batch_mock.commit.assert_not_called()
 
     def test_one_operation(self):
         """A single set should not auto-flush; only commit() triggers it."""
-        writer, _, batch_mock = self._make_writer()
+        writer, _, _, batch_mock = self._make_writer()
         writer.set(MagicMock(), {"a": 1})
         batch_mock.commit.assert_not_called()
         writer.commit()
@@ -159,9 +158,9 @@ class TestBatchWriter:
 
     def test_451_operations_two_commits(self):
         """451 ops => flush at 450 + final commit for the 1 leftover."""
-        writer, col_ref, first_batch = self._make_writer(limit=450)
+        writer, col_ref, db_client, first_batch = self._make_writer(limit=450)
         second_batch = MagicMock()
-        col_ref.firestore_client.batch.side_effect = [second_batch]
+        db_client.batch.side_effect = [second_batch]
 
         doc_ref = MagicMock()
         for _ in range(451):
@@ -173,7 +172,7 @@ class TestBatchWriter:
 
     def test_set_update_delete_all_work(self):
         """All three write operations go through the batch."""
-        writer, _, batch_mock = self._make_writer()
+        writer, _, _, batch_mock = self._make_writer()
         doc = MagicMock()
 
         writer.set(doc, {"a": 1}, merge=True)
@@ -196,8 +195,8 @@ class TestBatchWriter:
 
 class TestFirestoreCollectionAdd:
     def test_add_creates_documents_with_correct_schema(self):
-        col_ref, batch_mock = _make_col_ref()
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        col_ref, db_client, batch_mock = _make_col_ref()
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
         # Mock doc refs that don't exist yet
         doc1 = MagicMock()
@@ -220,8 +219,8 @@ class TestFirestoreCollectionAdd:
 
     def test_add_duplicate_id_is_silently_skipped(self):
         """ChromaDB behaviour: duplicate add is silently ignored, original kept."""
-        col_ref, batch_mock = _make_col_ref()
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        col_ref, db_client, batch_mock = _make_col_ref()
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
         # First doc exists, second does not
         doc1 = MagicMock()
@@ -245,15 +244,15 @@ class TestFirestoreCollectionAdd:
         assert written_data["meta"] == {"k": "v2"}
 
     def test_add_empty_list(self):
-        col_ref, batch_mock = _make_col_ref()
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        col_ref, db_client, batch_mock = _make_col_ref()
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
         fc.add(documents=[], ids=[], metadatas=[])
         batch_mock.set.assert_not_called()
 
     def test_add_without_metadatas(self):
-        col_ref, batch_mock = _make_col_ref()
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        col_ref, db_client, batch_mock = _make_col_ref()
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
         doc1 = MagicMock()
         doc1.get.return_value = _make_doc_snapshot("id1", None, exists=False)
@@ -264,8 +263,8 @@ class TestFirestoreCollectionAdd:
         assert data["meta"] == {}
 
     def test_add_single_doc(self):
-        col_ref, batch_mock = _make_col_ref()
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        col_ref, db_client, batch_mock = _make_col_ref()
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
         doc1 = MagicMock()
         doc1.get.return_value = _make_doc_snapshot("single", None, exists=False)
@@ -282,8 +281,8 @@ class TestFirestoreCollectionAdd:
 
     def test_add_all_duplicates_skipped(self):
         """When all IDs already exist, nothing is written."""
-        col_ref, batch_mock = _make_col_ref()
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        col_ref, db_client, batch_mock = _make_col_ref()
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
         doc1 = MagicMock()
         doc1.get.return_value = _make_doc_snapshot("id1", {"document": "old"}, exists=True)
@@ -301,8 +300,8 @@ class TestFirestoreCollectionAdd:
 
 class TestFirestoreCollectionUpsert:
     def test_upsert_uses_merge_true(self):
-        col_ref, batch_mock = _make_col_ref()
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        col_ref, db_client, batch_mock = _make_col_ref()
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
         fc.upsert(
             documents=["hi"],
@@ -315,8 +314,8 @@ class TestFirestoreCollectionUpsert:
         assert kwargs["merge"] is True
 
     def test_upsert_empty_list(self):
-        col_ref, batch_mock = _make_col_ref()
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        col_ref, db_client, batch_mock = _make_col_ref()
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
         fc.upsert(documents=[], ids=[], metadatas=[])
 
@@ -324,8 +323,8 @@ class TestFirestoreCollectionUpsert:
         batch_mock.commit.assert_not_called()
 
     def test_upsert_without_metadatas(self):
-        col_ref, batch_mock = _make_col_ref()
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        col_ref, db_client, batch_mock = _make_col_ref()
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
         fc.upsert(documents=["doc"], ids=["id1"])
 
@@ -333,12 +332,12 @@ class TestFirestoreCollectionUpsert:
         assert data["meta"] == {}
 
     def test_upsert_over_batch_limit(self):
-        col_ref, _ = _make_col_ref()
+        col_ref, db_client, _ = _make_col_ref()
         first_batch = MagicMock()
         second_batch = MagicMock()
-        col_ref.firestore_client.batch.side_effect = [first_batch, second_batch]
+        db_client.batch.side_effect = [first_batch, second_batch]
 
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
         docs = [f"doc_{i}" for i in range(460)]
         ids = [f"id_{i}" for i in range(460)]
@@ -351,8 +350,8 @@ class TestFirestoreCollectionUpsert:
 
 class TestFirestoreCollectionUpdate:
     def test_update_with_documents_reembeds(self):
-        col_ref, batch_mock = _make_col_ref()
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        col_ref, db_client, batch_mock = _make_col_ref()
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
         doc_ref = MagicMock()
         doc_ref.get.return_value = _make_doc_snapshot("id1", {"document": "old"}, exists=True)
@@ -367,8 +366,8 @@ class TestFirestoreCollectionUpdate:
         assert data["meta"] == {"m": 2}
 
     def test_update_metadata_only_no_reembed(self):
-        col_ref, batch_mock = _make_col_ref()
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        col_ref, db_client, batch_mock = _make_col_ref()
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
         doc_ref = MagicMock()
         doc_ref.get.return_value = _make_doc_snapshot("id1", {"document": "old"}, exists=True)
@@ -382,16 +381,16 @@ class TestFirestoreCollectionUpdate:
         assert data["meta"] == {"m": 3}
 
     def test_update_with_nothing(self):
-        col_ref, batch_mock = _make_col_ref()
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        col_ref, db_client, batch_mock = _make_col_ref()
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
         fc.update(ids=["id1"])
         batch_mock.update.assert_not_called()
 
     def test_update_nonexistent_id_is_silent_noop(self):
         """ChromaDB behaviour: update with nonexistent ID is a silent no-op."""
-        col_ref, batch_mock = _make_col_ref()
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        col_ref, db_client, batch_mock = _make_col_ref()
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
         doc_ref = MagicMock()
         doc_ref.get.return_value = _make_doc_snapshot("id_missing", None, exists=False)
@@ -404,8 +403,8 @@ class TestFirestoreCollectionUpdate:
 
     def test_update_mixed_existing_and_nonexistent(self):
         """Only existing docs are updated; nonexistent ones are silently skipped."""
-        col_ref, batch_mock = _make_col_ref()
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        col_ref, db_client, batch_mock = _make_col_ref()
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
         doc_existing = MagicMock()
         doc_existing.get.return_value = _make_doc_snapshot("id1", {"document": "old"}, exists=True)
@@ -425,8 +424,8 @@ class TestFirestoreCollectionUpdate:
 
     def test_update_partial_docs_and_meta(self):
         """Some entries have docs, some have meta, some have both."""
-        col_ref, batch_mock = _make_col_ref()
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        col_ref, db_client, batch_mock = _make_col_ref()
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
         # All three exist
         doc1 = MagicMock()
@@ -461,14 +460,17 @@ class TestFirestoreCollectionUpdate:
 
 class TestFirestoreCollectionQuery:
     def test_query_embeds_and_calls_find_nearest(self):
-        col_ref, _ = _make_col_ref()
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        col_ref, db_client, _ = _make_col_ref()
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
-        snap = _make_doc_snapshot("d1", {
-            "document": "hello",
-            "meta": {"k": "v"},
-            "vector_distance": 0.1,
-        })
+        snap = _make_doc_snapshot(
+            "d1",
+            {
+                "document": "hello",
+                "meta": {"k": "v"},
+                "vector_distance": 0.1,
+            },
+        )
         # find_nearest returns a query object whose .get() returns docs
         nearest_query = MagicMock()
         nearest_query.get.return_value = [snap]
@@ -488,16 +490,16 @@ class TestFirestoreCollectionQuery:
         assert result["distances"] == [[0.1]]
 
     def test_query_empty_query_texts(self):
-        col_ref, _ = _make_col_ref()
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        col_ref, db_client, _ = _make_col_ref()
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
         result = fc.query(query_texts=[])
 
         assert result == {"ids": [[]], "documents": [[]], "metadatas": [[]], "distances": [[]]}
 
     def test_query_with_where_filter(self):
-        col_ref, _ = _make_col_ref()
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        col_ref, db_client, _ = _make_col_ref()
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
         filtered_ref = MagicMock()
         col_ref.where.return_value = filtered_ref
@@ -514,19 +516,25 @@ class TestFirestoreCollectionQuery:
 
     def test_query_multiple_query_texts(self):
         """Multiple query_texts produce one result set per text (nested lists)."""
-        col_ref, _ = _make_col_ref()
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        col_ref, db_client, _ = _make_col_ref()
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
-        snap1 = _make_doc_snapshot("d1", {
-            "document": "first",
-            "meta": {"k": "v1"},
-            "vector_distance": 0.1,
-        })
-        snap2 = _make_doc_snapshot("d2", {
-            "document": "second",
-            "meta": {"k": "v2"},
-            "vector_distance": 0.3,
-        })
+        snap1 = _make_doc_snapshot(
+            "d1",
+            {
+                "document": "first",
+                "meta": {"k": "v1"},
+                "vector_distance": 0.1,
+            },
+        )
+        snap2 = _make_doc_snapshot(
+            "d2",
+            {
+                "document": "second",
+                "meta": {"k": "v2"},
+                "vector_distance": 0.3,
+            },
+        )
 
         nearest_q1 = MagicMock()
         nearest_q1.get.return_value = [snap1]
@@ -544,8 +552,8 @@ class TestFirestoreCollectionQuery:
         assert result["distances"] == [[0.1], [0.3]]
 
     def test_query_no_results(self):
-        col_ref, _ = _make_col_ref()
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        col_ref, db_client, _ = _make_col_ref()
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
         nearest_q = MagicMock()
         nearest_q.get.return_value = []
@@ -560,22 +568,28 @@ class TestFirestoreCollectionQuery:
 
     def test_query_where_with_multi_text(self):
         """Where filter combined with multiple query texts."""
-        col_ref, _ = _make_col_ref()
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        col_ref, db_client, _ = _make_col_ref()
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
         filtered_ref = MagicMock()
         col_ref.where.return_value = filtered_ref
 
-        snap1 = _make_doc_snapshot("d1", {
-            "document": "first",
-            "meta": {"wing": "notes"},
-            "vector_distance": 0.1,
-        })
-        snap2 = _make_doc_snapshot("d2", {
-            "document": "second",
-            "meta": {"wing": "notes"},
-            "vector_distance": 0.2,
-        })
+        snap1 = _make_doc_snapshot(
+            "d1",
+            {
+                "document": "first",
+                "meta": {"wing": "notes"},
+                "vector_distance": 0.1,
+            },
+        )
+        snap2 = _make_doc_snapshot(
+            "d2",
+            {
+                "document": "second",
+                "meta": {"wing": "notes"},
+                "vector_distance": 0.2,
+            },
+        )
 
         nearest_q1 = MagicMock()
         nearest_q1.get.return_value = [snap1]
@@ -596,14 +610,17 @@ class TestFirestoreCollectionQuery:
 
     def test_query_include_filtering_returns_none_for_excluded(self):
         """ChromaDB behaviour: non-included fields are None, not omitted."""
-        col_ref, _ = _make_col_ref()
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        col_ref, db_client, _ = _make_col_ref()
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
-        snap = _make_doc_snapshot("d1", {
-            "document": "hello",
-            "meta": {"k": "v"},
-            "vector_distance": 0.1,
-        })
+        snap = _make_doc_snapshot(
+            "d1",
+            {
+                "document": "hello",
+                "meta": {"k": "v"},
+                "vector_distance": 0.1,
+            },
+        )
         nearest_q = MagicMock()
         nearest_q.get.return_value = [snap]
         col_ref.find_nearest.return_value = nearest_q
@@ -624,27 +641,27 @@ class TestFirestoreCollectionQuery:
 
 class TestFirestoreCollectionGet:
     def test_get_by_ids(self):
-        col_ref, _ = _make_col_ref()
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        col_ref, db_client, _ = _make_col_ref()
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
         existing = _make_doc_snapshot("id1", {"document": "text", "meta": {"a": 1}})
-        col_ref.firestore_client.get_all.return_value = [existing]
+        db_client.get_all.return_value = [existing]
 
         result = fc.get(ids=["id1"])
 
-        col_ref.firestore_client.get_all.assert_called_once()
+        db_client.get_all.assert_called_once()
         assert result["ids"] == ["id1"]
         assert result["documents"] == ["text"]
         assert result["metadatas"] == [{"a": 1}]
 
     def test_get_by_ids_some_missing(self):
-        col_ref, _ = _make_col_ref()
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        col_ref, db_client, _ = _make_col_ref()
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
         existing = _make_doc_snapshot("id1", {"document": "hi", "meta": {}})
         missing = _make_doc_snapshot("id2", None, exists=False)
 
-        col_ref.firestore_client.get_all.return_value = [existing, missing]
+        db_client.get_all.return_value = [existing, missing]
 
         result = fc.get(ids=["id1", "id2"])
 
@@ -652,8 +669,8 @@ class TestFirestoreCollectionGet:
         assert len(result["documents"]) == 1
 
     def test_get_with_where_limit_offset(self):
-        col_ref, _ = _make_col_ref()
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        col_ref, db_client, _ = _make_col_ref()
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
         snap = _make_doc_snapshot("d1", {"document": "text", "meta": {}})
         chain = MagicMock()
@@ -670,8 +687,8 @@ class TestFirestoreCollectionGet:
         assert result["ids"] == ["d1"]
 
     def test_get_no_args_returns_all(self):
-        col_ref, _ = _make_col_ref()
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        col_ref, db_client, _ = _make_col_ref()
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
         s1 = _make_doc_snapshot("a", {"document": "one", "meta": {}})
         s2 = _make_doc_snapshot("b", {"document": "two", "meta": {}})
@@ -684,20 +701,20 @@ class TestFirestoreCollectionGet:
 
     def test_get_empty_ids_raises_valueerror(self):
         """ChromaDB behaviour: get(ids=[]) raises ValueError."""
-        col_ref, _ = _make_col_ref()
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        col_ref, db_client, _ = _make_col_ref()
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
         with pytest.raises(ValueError, match="Expected IDs to be a non-empty list"):
             fc.get(ids=[])
 
     def test_get_all_ids_missing(self):
         """ChromaDB behaviour: all missing IDs returns empty lists."""
-        col_ref, _ = _make_col_ref()
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        col_ref, db_client, _ = _make_col_ref()
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
         missing1 = _make_doc_snapshot("id1", None, exists=False)
         missing2 = _make_doc_snapshot("id2", None, exists=False)
-        col_ref.firestore_client.get_all.return_value = [missing1, missing2]
+        db_client.get_all.return_value = [missing1, missing2]
 
         result = fc.get(ids=["id1", "id2"])
 
@@ -707,11 +724,11 @@ class TestFirestoreCollectionGet:
 
     def test_get_include_filtering_returns_none_for_excluded(self):
         """ChromaDB behaviour: non-included fields are None, not omitted."""
-        col_ref, _ = _make_col_ref()
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        col_ref, db_client, _ = _make_col_ref()
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
         existing = _make_doc_snapshot("id1", {"document": "text", "meta": {"a": 1}})
-        col_ref.firestore_client.get_all.return_value = [existing]
+        db_client.get_all.return_value = [existing]
 
         result = fc.get(ids=["id1"], include=["documents"])
 
@@ -722,11 +739,11 @@ class TestFirestoreCollectionGet:
 
     def test_get_include_metadatas_only(self):
         """include=['metadatas'] returns metadatas, documents is None."""
-        col_ref, _ = _make_col_ref()
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        col_ref, db_client, _ = _make_col_ref()
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
         existing = _make_doc_snapshot("id1", {"document": "text", "meta": {"a": 1}})
-        col_ref.firestore_client.get_all.return_value = [existing]
+        db_client.get_all.return_value = [existing]
 
         result = fc.get(ids=["id1"], include=["metadatas"])
 
@@ -737,8 +754,8 @@ class TestFirestoreCollectionGet:
 
 class TestFirestoreCollectionDelete:
     def test_delete_by_ids(self):
-        col_ref, batch_mock = _make_col_ref()
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        col_ref, db_client, batch_mock = _make_col_ref()
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
         doc1 = MagicMock()
         doc2 = MagicMock()
@@ -750,8 +767,8 @@ class TestFirestoreCollectionDelete:
         batch_mock.commit.assert_called_once()
 
     def test_delete_by_where_filter(self):
-        col_ref, batch_mock = _make_col_ref()
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        col_ref, db_client, batch_mock = _make_col_ref()
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
         s1 = _make_doc_snapshot("d1", {})
         s2 = _make_doc_snapshot("d2", {})
@@ -765,19 +782,19 @@ class TestFirestoreCollectionDelete:
         batch_mock.commit.assert_called_once()
 
     def test_delete_no_args_raises(self):
-        col_ref, _ = _make_col_ref()
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        col_ref, db_client, _ = _make_col_ref()
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
         with pytest.raises(ValueError, match="At least one of"):
             fc.delete()
 
     def test_delete_over_batch_limit_ids(self):
-        col_ref, _ = _make_col_ref()
+        col_ref, db_client, _ = _make_col_ref()
         first_batch = MagicMock()
         second_batch = MagicMock()
-        col_ref.firestore_client.batch.side_effect = [first_batch, second_batch]
+        db_client.batch.side_effect = [first_batch, second_batch]
 
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
         ids = [f"id_{i}" for i in range(460)]
         fc.delete(ids=ids)
@@ -787,16 +804,16 @@ class TestFirestoreCollectionDelete:
 
     def test_delete_empty_ids_raises_valueerror(self):
         """ChromaDB behaviour: delete(ids=[]) raises ValueError."""
-        col_ref, batch_mock = _make_col_ref()
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        col_ref, db_client, batch_mock = _make_col_ref()
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
         with pytest.raises(ValueError, match="Expected IDs to be a non-empty list"):
             fc.delete(ids=[])
 
     def test_delete_where_no_matches(self):
         """Where filter matches nothing — commit with zero ops is a no-op."""
-        col_ref, batch_mock = _make_col_ref()
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        col_ref, db_client, batch_mock = _make_col_ref()
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
         chain = MagicMock()
         col_ref.where.return_value = chain
@@ -810,8 +827,8 @@ class TestFirestoreCollectionDelete:
 
     def test_delete_where_document_contains(self):
         """where_document $contains: simulated via client-side filtering."""
-        col_ref, batch_mock = _make_col_ref()
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        col_ref, db_client, batch_mock = _make_col_ref()
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
         snap_match = MagicMock()
         snap_match.to_dict.return_value = {"document": "hello world"}
@@ -829,8 +846,8 @@ class TestFirestoreCollectionDelete:
 
     def test_delete_where_document_not_contains(self):
         """where_document $not_contains: deletes docs NOT containing the string."""
-        col_ref, batch_mock = _make_col_ref()
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        col_ref, db_client, batch_mock = _make_col_ref()
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
         snap_a = MagicMock()
         snap_a.to_dict.return_value = {"document": "hello world"}
@@ -849,8 +866,8 @@ class TestFirestoreCollectionDelete:
 
 class TestFirestoreCollectionCount:
     def test_count(self):
-        col_ref, _ = _make_col_ref()
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        col_ref, db_client, _ = _make_col_ref()
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
         agg_val = MagicMock()
         agg_val.value = 42
@@ -859,8 +876,8 @@ class TestFirestoreCollectionCount:
         assert fc.count() == 42
 
     def test_count_empty_collection(self):
-        col_ref, _ = _make_col_ref()
-        fc = FirestoreCollection(col_ref, embed_fn=_fake_embed)
+        col_ref, db_client, _ = _make_col_ref()
+        fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
         agg_val = MagicMock()
         agg_val.value = 0
@@ -966,12 +983,15 @@ class TestApplyWhereFilter:
         q = MagicMock()
         q.where.return_value = q
 
-        _apply_where_filter(q, {
-            "$and": [
-                {"wing": {"$in": ["a", "b"]}},
-                {"room": "backend"},
-            ]
-        })
+        _apply_where_filter(
+            q,
+            {
+                "$and": [
+                    {"wing": {"$in": ["a", "b"]}},
+                    {"room": "backend"},
+                ]
+            },
+        )
 
         assert q.where.call_count == 2
         q.where.assert_any_call(filter=_FakeFieldFilter("meta.wing", "in", ["a", "b"]))
@@ -1052,10 +1072,15 @@ class TestApplyWhereFilter:
         q = MagicMock()
         q.where.return_value = q
 
-        _apply_where_filter(q, {"$or": [
-            {"score": {"$gte": 5}},
-            {"score": {"$lte": 1}},
-        ]})
+        _apply_where_filter(
+            q,
+            {
+                "$or": [
+                    {"score": {"$gte": 5}},
+                    {"score": {"$lte": 1}},
+                ]
+            },
+        )
 
         q.where.assert_called_once()
         or_filter = q.where.call_args[1]["filter"]
@@ -1065,7 +1090,9 @@ class TestApplyWhereFilter:
 
     def test_multi_operator_dict_raises_valueerror(self):
         """ChromaDB behaviour: {"$gte": 5, "$lte": 10} raises ValueError."""
-        with pytest.raises(ValueError, match="Expected operator expression to have exactly one operator"):
+        with pytest.raises(
+            ValueError, match="Expected operator expression to have exactly one operator"
+        ):
             _build_field_filter("score", {"$gte": 5, "$lte": 10})
 
     def test_nested_and_inside_or(self):
@@ -1073,10 +1100,15 @@ class TestApplyWhereFilter:
         q = MagicMock()
         q.where.return_value = q
 
-        _apply_where_filter(q, {"$or": [
-            {"$and": [{"wing": "a"}, {"room": "b"}]},
-            {"$and": [{"wing": "c"}, {"room": "d"}]},
-        ]})
+        _apply_where_filter(
+            q,
+            {
+                "$or": [
+                    {"$and": [{"wing": "a"}, {"room": "b"}]},
+                    {"$and": [{"wing": "c"}, {"room": "d"}]},
+                ]
+            },
+        )
 
         q.where.assert_called_once()
         or_filter = q.where.call_args[1]["filter"]
