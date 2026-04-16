@@ -44,7 +44,7 @@ def _init_default_backend():
     backend_type = os.environ.get("MEMPALACE_BACKEND", "chroma").lower()
     if backend_type == "firestore":
         from google.cloud import firestore as firestore_mod  # type: ignore[attr-defined]
-        from .backends.firestore import FirestoreBackend
+        from .backends.firestore.collection import FirestoreBackend
 
         db = firestore_mod.Client()
         return FirestoreBackend(db)

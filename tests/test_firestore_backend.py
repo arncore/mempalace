@@ -78,9 +78,8 @@ sys.modules.setdefault(
 )
 sys.modules.setdefault("google.cloud.firestore_v1.vector", _mock_firestore_v1.vector)
 
-from mempalace.backends.firestore import (  # noqa: E402
-    FirestoreBackend,
-    FirestoreCollection,
+from mempalace.backends.firestore import FirestoreBackend, FirestoreCollection  # noqa: E402
+from mempalace.backends.firestore.collection import (  # noqa: E402
     _apply_where_filter,
     _build_field_filter,
 )

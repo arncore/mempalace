@@ -19,7 +19,7 @@ from google.cloud.firestore_v1.base_query import FieldFilter, Or
 from google.cloud.firestore_v1.base_vector_query import DistanceMeasure
 from google.cloud.firestore_v1.vector import Vector
 
-from .base import BaseCollection
+from ..base import BaseCollection
 
 logger = logging.getLogger("mempalace.backends.firestore")
 

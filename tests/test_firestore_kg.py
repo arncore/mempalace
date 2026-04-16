@@ -33,7 +33,7 @@ sys.modules.setdefault("google.cloud", MagicMock())
 sys.modules.setdefault("google.cloud.firestore_v1", MagicMock())
 sys.modules.setdefault("google.cloud.firestore_v1.transaction", _mock_txn_module)
 
-from mempalace.firestore_knowledge_graph import FirestoreKnowledgeGraph  # noqa: E402
+from mempalace.backends.firestore import FirestoreKnowledgeGraph  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Helpers

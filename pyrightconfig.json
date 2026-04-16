@@ -1,8 +1,8 @@
 {
   "include": [
-    "mempalace/backends/firestore.py",
-    "mempalace/firestore_knowledge_graph.py",
-    "mempalace/firestore_tunnels.py",
+    "mempalace/backends/firestore/collection.py",
+    "mempalace/backends/firestore/knowledge_graph.py",
+    "mempalace/backends/firestore/tunnels.py",
     "mempalace/palace.py"
   ],
   "pythonVersion": "3.9",

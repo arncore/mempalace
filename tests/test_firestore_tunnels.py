@@ -32,7 +32,7 @@ sys.modules.setdefault("google.cloud", MagicMock())
 sys.modules.setdefault("google.cloud.firestore_v1", MagicMock())
 sys.modules.setdefault("google.cloud.firestore_v1.transaction", _mock_txn_module)
 
-from mempalace.firestore_tunnels import (  # noqa: E402
+from mempalace.backends.firestore.tunnels import (  # noqa: E402
     FirestoreTunnelStore,
     _canonical_tunnel_id,
     _endpoint_key,
