@@ -36,6 +36,7 @@ READABLE_EXTENSIONS = {
     ".jsx",
     ".tsx",
     ".json",
+    ".jsonl",
     ".yaml",
     ".yml",
     ".html",
@@ -51,6 +52,7 @@ READABLE_EXTENSIONS = {
 }
 
 SKIP_FILENAMES = {
+    "entities.json",
     "mempalace.yaml",
     "mempalace.yml",
     "mempal.yaml",
@@ -62,7 +64,14 @@ SKIP_FILENAMES = {
 CHUNK_SIZE = 800  # chars per drawer
 CHUNK_OVERLAP = 100  # overlap between chunks
 MIN_CHUNK_SIZE = 50  # skip tiny chunks
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB — skip files larger than this
+MAX_FILE_SIZE = 500 * 1024 * 1024  # 500 MB — skip files larger than this.
+# Long Claude Code sessions and large transcript exports routinely exceed
+# 10 MB. The cap exists as a defensive rail against pathological binary
+# files, not as a limit on legitimate text. Per-drawer size is bounded
+# by CHUNK_SIZE, but larger sources still produce proportionally more
+# drawers and therefore more storage, embedding, and processing work —
+# and file reads are not streamed (the whole content is loaded into
+# memory before chunking), so memory use scales with source size too.
 
 
 # =============================================================================
@@ -264,16 +273,32 @@ def load_config(project_dir: str) -> dict:
     """Load mempalace.yaml from project directory (falls back to mempal.yaml)."""
     import yaml
 
-    config_path = Path(project_dir).expanduser().resolve() / "mempalace.yaml"
+    resolved_project_dir = Path(project_dir).expanduser().resolve()
+    config_path = resolved_project_dir / "mempalace.yaml"
     if not config_path.exists():
         # Fallback to legacy name
-        legacy_path = Path(project_dir).expanduser().resolve() / "mempal.yaml"
+        legacy_path = resolved_project_dir / "mempal.yaml"
         if legacy_path.exists():
             config_path = legacy_path
         else:
-            print(f"ERROR: No mempalace.yaml found in {project_dir}")
-            print(f"Run: mempalace init {project_dir}")
-            sys.exit(1)
+            wing_name = resolved_project_dir.name
+            print(
+                f"  No mempalace.yaml found in {resolved_project_dir} "
+                f"— using auto-detected defaults (wing='{wing_name}'). "
+                "Directories with the same basename will share a wing; "
+                "add mempalace.yaml to disambiguate.",
+                file=sys.stderr,
+            )
+            return {
+                "wing": wing_name,
+                "rooms": [
+                    {
+                        "name": "general",
+                        "description": "All project files",
+                        "keywords": ["general"],
+                    }
+                ],
+            }
     with open(config_path) as f:
         return yaml.safe_load(f)
 
@@ -447,6 +472,97 @@ def _load_known_entities_raw() -> dict:
     return dict(_ENTITY_REGISTRY_CACHE["raw"])
 
 
+def add_to_known_entities(entities_by_category: dict) -> str:
+    """Union ``entities_by_category`` into ``~/.mempalace/known_entities.json``.
+
+    Accepts ``{category: [names]}`` shape as produced by ``mempalace init``
+    and merges into the registry the miner reads at mine time. Existing
+    categories are preserved untouched unless also present in the input;
+    for categories present in both, entries are unioned case-insensitively
+    without changing the on-disk ordering of pre-existing names.
+
+    If a category is stored on-disk as ``{name: code}`` (the alternate
+    miner-supported shape, used by dialect-style configs), new names are
+    added as keys with ``None`` values so existing code mappings aren't
+    overwritten. A later compress pass can assign codes.
+
+    The in-process cache is invalidated on write so same-process callers
+    (notably ``cmd_init`` → ``cmd_mine`` in sequence) see the update
+    immediately instead of waiting for a mtime re-check.
+
+    Returns the registry path as a string for logging.
+    """
+    import json as _json
+    from pathlib import Path as _Path
+
+    registry_path = _Path(_ENTITY_REGISTRY_PATH)
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+
+    existing: dict = {}
+    if registry_path.exists():
+        try:
+            loaded = _json.loads(registry_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                existing = loaded
+        except (_json.JSONDecodeError, OSError):
+            existing = {}
+
+    def _coerce_name(value):
+        if not value:
+            return None
+        name = str(value)
+        return name if name else None
+
+    for category, names in entities_by_category.items():
+        if not isinstance(names, list) or not names:
+            continue
+        current = existing.get(category)
+        if isinstance(current, list):
+            seen_lower = {str(n).lower() for n in current}
+            for n in names:
+                name = _coerce_name(n)
+                if not name:
+                    continue
+                if name.lower() not in seen_lower:
+                    current.append(name)
+                    seen_lower.add(name.lower())
+        elif isinstance(current, dict):
+            seen_lower = {str(name).lower() for name in current}
+            for n in names:
+                name = _coerce_name(n)
+                if not name or name.lower() in seen_lower:
+                    continue
+                current[name] = None
+                seen_lower.add(name.lower())
+        else:
+            # Missing or unrecognized shape — seed as a fresh list, deduped
+            seen: set = set()
+            ordered: list = []
+            for n in names:
+                name = _coerce_name(n)
+                if not name:
+                    continue
+                key = name.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                ordered.append(name)
+            existing[category] = ordered
+
+    registry_path.write_text(_json.dumps(existing, indent=2, ensure_ascii=False), encoding="utf-8")
+    try:
+        registry_path.chmod(0o600)
+    except (OSError, NotImplementedError):
+        pass
+
+    # Invalidate in-process cache so later calls in the same run see the write.
+    _ENTITY_REGISTRY_CACHE["mtime"] = None
+    _ENTITY_REGISTRY_CACHE["names"] = frozenset()
+    _ENTITY_REGISTRY_CACHE["raw"] = {}
+
+    return str(registry_path)
+
+
 _HALL_KEYWORDS_CACHE = None
 
 
@@ -497,8 +613,10 @@ def _extract_entities_for_metadata(content: str) -> str:
         if re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", content):
             matched.add(name)
 
+    from .palace import _candidate_entity_words
+
     window = content[:_ENTITY_EXTRACT_WINDOW]
-    words = re.findall(r"\b[A-Z][a-z]{2,}\b", window)
+    words = _candidate_entity_words(window)
     freq: dict = {}
     for w in words:
         if w in _ENTITY_STOPLIST:
@@ -586,7 +704,7 @@ def process_file(
     chunks = chunk_text(content, source_file)
 
     if dry_run:
-        print(f"    [DRY RUN] {filepath.name} → room:{room} ({len(chunks)} drawers)")
+        print(f"    [DRY RUN] {filepath.name} -> room:{room} ({len(chunks)} drawers)")
         return len(chunks), room
 
     # Lock this file so concurrent agents don't interleave delete+insert.
@@ -763,7 +881,7 @@ def mine(
         print("  .gitignore: DISABLED")
     if include_ignored:
         print(f"  Include: {', '.join(sorted(normalize_include_paths(include_ignored)))}")
-    print(f"{'─' * 55}\n")
+    print(f"{'-' * 55}\n")
 
     if not dry_run:
         collection = get_collection(palace_path)
@@ -793,7 +911,7 @@ def mine(
             total_drawers += drawers
             room_counts[room] += 1
             if not dry_run:
-                print(f"  ✓ [{i:4}/{len(files)}] {filepath.name[:50]:50} +{drawers}")
+                print(f"  + [{i:4}/{len(files)}] {filepath.name[:50]:50} +{drawers}")
 
     print(f"\n{'=' * 55}")
     print("  Done.")
@@ -821,17 +939,24 @@ def status(palace_path: str):
         print("  Run: mempalace init <dir> then mempalace mine <dir>")
         return
 
-    # Count by wing and room
+    # Count by wing and room — paginate to avoid SQLite "too many SQL
+    # variables" error on large palaces (see #802, #850).
     total = col.count()
-    r = col.get(limit=total, include=["metadatas"]) if total else {"metadatas": []}
-    metas = r["metadatas"]
-
-    wing_rooms = defaultdict(lambda: defaultdict(int))
-    for m in metas:
-        wing_rooms[m.get("wing", "?")][m.get("room", "?")] += 1
+    wing_rooms: dict = defaultdict(lambda: defaultdict(int))
+    batch_size = 5000
+    offset = 0
+    while offset < total:
+        r = col.get(limit=batch_size, offset=offset, include=["metadatas"])
+        batch = r["metadatas"]
+        if not batch:
+            break
+        for m in batch:
+            m = m or {}
+            wing_rooms[m.get("wing", "?")][m.get("room", "?")] += 1
+        offset += len(batch)
 
     print(f"\n{'=' * 55}")
-    print(f"  MemPalace Status — {len(metas)} drawers")
+    print(f"  MemPalace Status — {total} drawers")
     print(f"{'=' * 55}\n")
     for wing, rooms in sorted(wing_rooms.items()):
         print(f"  WING: {wing}")

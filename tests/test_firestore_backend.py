@@ -483,18 +483,18 @@ class TestFirestoreCollectionQuery:
         assert call_kwargs["distance_measure"] == _FakeDistanceMeasure.COSINE
         assert call_kwargs["limit"] == 5
 
-        assert result["ids"] == [["d1"]]
-        assert result["documents"] == [["hello"]]
-        assert result["metadatas"] == [[{"k": "v"}]]
-        assert result["distances"] == [[0.1]]
+        assert result.ids == [["d1"]]
+        assert result.documents == [["hello"]]
+        assert result.metadatas == [[{"k": "v"}]]
+        assert result.distances == [[0.1]]
 
     def test_query_empty_query_texts(self):
+        """RFC 001 §1: empty input list raises ValueError (matching chroma + spec)."""
         col_ref, db_client, _ = _make_col_ref()
         fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
-        result = fc.query(query_texts=[])
-
-        assert result == {"ids": [[]], "documents": [[]], "metadatas": [[]], "distances": [[]]}
+        with pytest.raises(ValueError, match="non-empty list"):
+            fc.query(query_texts=[])
 
     def test_query_with_where_filter(self):
         col_ref, db_client, _ = _make_col_ref()
@@ -545,10 +545,10 @@ class TestFirestoreCollectionQuery:
         result = fc.query(query_texts=["alpha", "beta"], n_results=5)
 
         assert col_ref.find_nearest.call_count == 2
-        assert result["ids"] == [["d1"], ["d2"]]
-        assert result["documents"] == [["first"], ["second"]]
-        assert result["metadatas"] == [[{"k": "v1"}], [{"k": "v2"}]]
-        assert result["distances"] == [[0.1], [0.3]]
+        assert result.ids == [["d1"], ["d2"]]
+        assert result.documents == [["first"], ["second"]]
+        assert result.metadatas == [[{"k": "v1"}], [{"k": "v2"}]]
+        assert result.distances == [[0.1], [0.3]]
 
     def test_query_no_results(self):
         col_ref, db_client, _ = _make_col_ref()
@@ -560,10 +560,10 @@ class TestFirestoreCollectionQuery:
 
         result = fc.query(query_texts=["something"], n_results=5)
 
-        assert result["ids"] == [[]]
-        assert result["documents"] == [[]]
-        assert result["metadatas"] == [[]]
-        assert result["distances"] == [[]]
+        assert result.ids == [[]]
+        assert result.documents == [[]]
+        assert result.metadatas == [[]]
+        assert result.distances == [[]]
 
     def test_query_where_with_multi_text(self):
         """Where filter combined with multiple query texts."""
@@ -605,10 +605,11 @@ class TestFirestoreCollectionQuery:
         # where should have been applied for each query text
         assert col_ref.where.call_count == 2
         assert filtered_ref.find_nearest.call_count == 2
-        assert result["ids"] == [["d1"], ["d2"]]
+        assert result.ids == [["d1"], ["d2"]]
 
-    def test_query_include_filtering_returns_none_for_excluded(self):
-        """ChromaDB behaviour: non-included fields are None, not omitted."""
+    def test_query_include_filtering_excluded_fields_are_empty(self):
+        """RFC 001 §1.3: excluded fields preserve outer query shape with empty
+        inner lists; only ``embeddings`` flips to None when not requested."""
         col_ref, db_client, _ = _make_col_ref()
         fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
@@ -630,12 +631,14 @@ class TestFirestoreCollectionQuery:
             include=["documents"],
         )
 
-        assert result["documents"] == [["hello"]]
-        # ChromaDB returns None for non-included fields, not omitting them
-        assert result["metadatas"] is None
-        assert result["distances"] is None
-        # ids are always included
-        assert result["ids"] == [["d1"]]
+        # ids are always included; documents was requested
+        assert result.ids == [["d1"]]
+        assert result.documents == [["hello"]]
+        # metadatas/distances excluded → outer shape preserved, inner empty
+        assert result.metadatas == [[]]
+        assert result.distances == [[]]
+        # embeddings is the only field that flips to None when not requested
+        assert result.embeddings is None
 
 
 class TestFirestoreCollectionGet:
@@ -649,9 +652,9 @@ class TestFirestoreCollectionGet:
         result = fc.get(ids=["id1"])
 
         db_client.get_all.assert_called_once()
-        assert result["ids"] == ["id1"]
-        assert result["documents"] == ["text"]
-        assert result["metadatas"] == [{"a": 1}]
+        assert result.ids == ["id1"]
+        assert result.documents == ["text"]
+        assert result.metadatas == [{"a": 1}]
 
     def test_get_by_ids_some_missing(self):
         col_ref, db_client, _ = _make_col_ref()
@@ -664,8 +667,8 @@ class TestFirestoreCollectionGet:
 
         result = fc.get(ids=["id1", "id2"])
 
-        assert result["ids"] == ["id1"]
-        assert len(result["documents"]) == 1
+        assert result.ids == ["id1"]
+        assert len(result.documents) == 1
 
     def test_get_with_where_limit_offset(self):
         col_ref, db_client, _ = _make_col_ref()
@@ -683,7 +686,7 @@ class TestFirestoreCollectionGet:
         col_ref.where.assert_called_once()
         chain.offset.assert_called_once_with(5)
         chain.limit.assert_called_once_with(10)
-        assert result["ids"] == ["d1"]
+        assert result.ids == ["d1"]
 
     def test_get_no_args_returns_all(self):
         col_ref, db_client, _ = _make_col_ref()
@@ -696,7 +699,7 @@ class TestFirestoreCollectionGet:
         result = fc.get()
 
         col_ref.stream.assert_called_once()
-        assert result["ids"] == ["a", "b"]
+        assert result.ids == ["a", "b"]
 
     def test_get_empty_ids_raises_valueerror(self):
         """ChromaDB behaviour: get(ids=[]) raises ValueError."""
@@ -717,12 +720,13 @@ class TestFirestoreCollectionGet:
 
         result = fc.get(ids=["id1", "id2"])
 
-        assert result["ids"] == []
-        assert result["documents"] == []
-        assert result["metadatas"] == []
+        assert result.ids == []
+        assert result.documents == []
+        assert result.metadatas == []
 
-    def test_get_include_filtering_returns_none_for_excluded(self):
-        """ChromaDB behaviour: non-included fields are None, not omitted."""
+    def test_get_include_filtering_excluded_fields_are_empty(self):
+        """RFC 001 §1.3: excluded fields collapse to []; only ``embeddings``
+        flips to None when not requested."""
         col_ref, db_client, _ = _make_col_ref()
         fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
@@ -731,13 +735,13 @@ class TestFirestoreCollectionGet:
 
         result = fc.get(ids=["id1"], include=["documents"])
 
-        assert result["ids"] == ["id1"]
-        assert result["documents"] == ["text"]
-        # ChromaDB returns None for non-included fields
-        assert result["metadatas"] is None
+        assert result.ids == ["id1"]
+        assert result.documents == ["text"]
+        assert result.metadatas == []
+        assert result.embeddings is None
 
     def test_get_include_metadatas_only(self):
-        """include=['metadatas'] returns metadatas, documents is None."""
+        """include=['metadatas'] returns metadatas with documents collapsed to []."""
         col_ref, db_client, _ = _make_col_ref()
         fc = FirestoreCollection(col_ref, db_client=db_client, embed_fn=_fake_embed)
 
@@ -746,9 +750,10 @@ class TestFirestoreCollectionGet:
 
         result = fc.get(ids=["id1"], include=["metadatas"])
 
-        assert result["ids"] == ["id1"]
-        assert result["documents"] is None
-        assert result["metadatas"] == [{"a": 1}]
+        assert result.ids == ["id1"]
+        assert result.documents == []
+        assert result.metadatas == [{"a": 1}]
+        assert result.embeddings is None
 
 
 class TestFirestoreCollectionDelete:
