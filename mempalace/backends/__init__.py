@@ -63,7 +63,7 @@ __all__ = [
     "unregister",
 ]
 
-# Firestore backend is imported lazily to avoid hard dependency on
-# google-cloud-firestore for users who only need ChromaDB. It has not yet
-# been ported to the RFC 001 BaseBackend contract — see PR description.
-# Use: from mempalace.backends.firestore import FirestoreBackend, FirestoreCollection
+# Firestore backend is published as the ``firestore`` entry point and
+# registered lazily so ``google-cloud-firestore`` / ``sentence-transformers``
+# remain optional dependencies (install via ``pip install mempalace[firestore]``).
+# Direct import: ``from mempalace.backends.firestore import FirestoreBackend``.

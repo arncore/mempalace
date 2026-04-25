@@ -32,6 +32,7 @@ sys.modules.setdefault("google.cloud", MagicMock())
 sys.modules.setdefault("google.cloud.firestore_v1", MagicMock())
 sys.modules.setdefault("google.cloud.firestore_v1.transaction", _mock_txn_module)
 
+from mempalace.backends.base import GetResult  # noqa: E402
 from mempalace.backends.firestore.tunnels import (  # noqa: E402
     FirestoreTunnelStore,
     _canonical_tunnel_id,
@@ -311,10 +312,12 @@ class TestFollowTunnels:
         store._col.stream.return_value = [t1]
 
         drawers_col = MagicMock()
-        drawers_col.get.return_value = {
-            "ids": ["d1"],
-            "documents": ["This is the drawer content preview text"],
-        }
+        # RFC 001: BaseCollection.get() returns a typed GetResult, not a dict.
+        drawers_col.get.return_value = GetResult(
+            ids=["d1"],
+            documents=["This is the drawer content preview text"],
+            metadatas=[{}],
+        )
 
         result = store.follow_tunnels("project", "backend", drawers_col=drawers_col)
 

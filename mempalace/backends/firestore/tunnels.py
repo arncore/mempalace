@@ -148,7 +148,7 @@ class FirestoreTunnelStore:
             if drawer_ids:
                 try:
                     results = drawers_col.get(ids=drawer_ids, include=["documents", "metadatas"])
-                    drawer_map = dict(zip(results["ids"], results["documents"]))
+                    drawer_map = dict(zip(results.ids, results.documents))
                     for c in connections:
                         did = c.get("drawer_id")
                         if did and did in drawer_map:
