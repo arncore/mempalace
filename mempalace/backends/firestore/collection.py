@@ -52,9 +52,7 @@ _OP_MAP = {
 # Operators we accept inside `where` (metadata filter).
 _SUPPORTED_WHERE_OPERATORS = frozenset({"$and", "$or"} | set(_OP_MAP.keys()))
 # Operators we accept inside `where_document`.
-_SUPPORTED_WHERE_DOCUMENT_OPERATORS = frozenset(
-    {"$contains", "$not_contains", "$and", "$or"}
-)
+_SUPPORTED_WHERE_DOCUMENT_OPERATORS = frozenset({"$contains", "$not_contains", "$and", "$or"})
 
 
 def _get_embed_model():
@@ -88,9 +86,7 @@ def _validate_where(where: Optional[dict], *, allowed: frozenset) -> None:
             continue
         for k, v in node.items():
             if k.startswith("$") and k not in allowed:
-                raise UnsupportedFilterError(
-                    f"operator {k!r} not supported by firestore backend"
-                )
+                raise UnsupportedFilterError(f"operator {k!r} not supported by firestore backend")
             if isinstance(v, dict):
                 stack.append(v)
             elif isinstance(v, list):
@@ -379,7 +375,8 @@ class FirestoreCollection(BaseCollection):
                     embed_values = (
                         list(raw_embed.values)
                         if hasattr(raw_embed, "values")
-                        else list(raw_embed) if raw_embed is not None
+                        else list(raw_embed)
+                        if raw_embed is not None
                         else []
                     )
                     embeddings_inner.append(embed_values)
@@ -437,7 +434,8 @@ class FirestoreCollection(BaseCollection):
         # where_document is a client-side filter regardless of how we got here.
         if where_document:
             snapshots = [
-                s for s in snapshots
+                s
+                for s in snapshots
                 if _matches_where_document(s.to_dict().get("document", ""), where_document)
             ]
 
@@ -456,7 +454,8 @@ class FirestoreCollection(BaseCollection):
                 embed_values = (
                     list(raw_embed.values)
                     if hasattr(raw_embed, "values")
-                    else list(raw_embed) if raw_embed is not None
+                    else list(raw_embed)
+                    if raw_embed is not None
                     else []
                 )
                 out_embeds.append(embed_values)
